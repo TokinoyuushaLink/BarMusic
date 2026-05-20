@@ -1,10 +1,15 @@
-# BarMusic
+# BarMusic      <img width="40" height="40" alt="未命名" src="https://github.com/user-attachments/assets/cbcbd7e1-a176-4818-84c5-51978ed56ed5" />
+
 
 菜单栏apple music控制app\
 macOS menubar Apple Music standlone control app\
-<img width="316" height="621" alt="截屏2026-05-20 下午9 28 11" src="https://github.com/user-attachments/assets/fbe7aafb-5f74-492b-8825-c3c33cc59bbf" />
-<img width="316" height="511" alt="截屏2026-05-20 下午9 28 28" src="https://github.com/user-attachments/assets/5a7c46b9-911c-4d10-9bc7-3935ee38724c" />
-<img width="852" height="496" alt="截屏2026-05-20 下午9 28 46" src="https://github.com/user-attachments/assets/5aa2033f-2609-43cd-857e-e89ebb58ac76" />
+<img width="342" height="682" alt="截屏2026-05-21 上午7 39 45" src="https://github.com/user-attachments/assets/41366862-bcbd-4fbd-89fe-29029f470482" />
+<img width="342" height="682" alt="截屏2026-05-21 上午7 39 53" src="https://github.com/user-attachments/assets/14181d51-b1cc-4d63-ba9f-41862bc7ae92" />
+<img width="852" height="546" alt="截屏2026-05-21 上午7 46 09" src="https://github.com/user-attachments/assets/b360cb13-2353-4c54-9ef2-6ba0d32903cf" />
+
+<img width="312" height="236" alt="截屏2026-05-21 上午7 40 07" src="https://github.com/user-attachments/assets/fc683dad-e6d3-4899-800d-ed06a5dd2034" />
+
+
 
 
 > ⚠️注意：当前只在手动导入到本地的Apple Music的歌曲中尝试，没有测试过在线的歌曲，手动导入到Apple Music的歌曲与在线的歌曲播放的策略不同，请酌情安装。
