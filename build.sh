@@ -95,7 +95,7 @@ swiftc \
     -framework Cocoa \
     -framework AVFoundation \
     -framework iTunesLibrary \
-    -target "$(uname -m)-apple-macos14.0" \
+    -target "$(uname -m)-apple-macos13.0" \
     "$SCRIPT_DIR/BarMusicApp.swift" \
     "$SCRIPT_DIR/ContentView.swift" \
     "$SCRIPT_DIR/AudioPlayer.swift" \
@@ -117,9 +117,9 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     <key>CFBundleName</key>                  <string>BarMusic</string>
     <key>CFBundleDisplayName</key>           <string>BarMusic</string>
     <key>CFBundlePackageType</key>           <string>APPL</string>
-    <key>CFBundleShortVersionString</key>    <string>1.0.0</string>
-    <key>CFBundleVersion</key>               <string>1.0.0</string>
-    <key>LSMinimumSystemVersion</key>        <string>14.0</string>
+    <key>CFBundleShortVersionString</key>    <string>1.0.1</string>
+    <key>CFBundleVersion</key>               <string>1</string>
+    <key>LSMinimumSystemVersion</key>        <string>13.0</string>
     <key>LSUIElement</key>                   <true/>
     <key>NSPrincipalClass</key>              <string>NSApplication</string>
     <key>CFBundleIconFile</key>              <string>AppIcon</string>

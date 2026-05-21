@@ -3,10 +3,6 @@ import AppKit
 import Combine
 import iTunesLibrary
 
-
-// NSImage is not Sendable; wrap for safe cross-actor transfer
-struct SendableImage: @unchecked Sendable { let image: NSImage? }
-
 // MARK: - Track entry for drill-down view
 
 struct PlaylistTrackItem: Identifiable {
@@ -38,11 +34,11 @@ final class LibraryCache {
 final class ArtworkCache {
     static let shared = ArtworkCache()
     private init() {}
-    private var cache: [URL: NSImage] = [:]
+    private var cache: [URL: Data] = [:]
     private let queue = DispatchQueue(label: "ArtworkCache", attributes: .concurrent)
-    func artwork(for url: URL) -> NSImage? { queue.sync { cache[url] } }
-    func store(_ image: NSImage, for url: URL) {
-        queue.async(flags: .barrier) { self.cache[url] = image }
+    func artworkData(for url: URL) -> Data? { queue.sync { cache[url] } }
+    func store(_ data: Data, for url: URL) {
+        queue.async(flags: .barrier) { self.cache[url] = data }
     }
     func clear() { queue.async(flags: .barrier) { self.cache.removeAll() } }
 }
@@ -67,10 +63,7 @@ final class MusicBridge: ObservableObject {
     @Published var isLoadingDrill: Bool = false
 
     @Published var sortByTrackOrder: Bool = UserDefaults.standard.object(forKey: "sortByTrackOrder") as? Bool ?? true
-    @Published var playMode: PlayMode = {
-        let idx = UserDefaults.standard.integer(forKey: "playMode")
-        return PlayMode.allCases.indices.contains(idx) ? PlayMode.allCases[idx] : .sequential
-    }()
+    @Published var playMode: PlayMode = .sequential
 
     // Folder collapse state
     @Published var collapsedFolders: Set<String> = {
@@ -99,9 +92,8 @@ final class MusicBridge: ObservableObject {
             }
         }
 
-        // Apply persisted volume and playMode to the player immediately
+        // Apply persisted volume to the player immediately
         audioPlayer.setVolume(volume)
-        audioPlayer.setPlayMode(playMode)
     }
 
     // MARK: - Playback controls
@@ -113,9 +105,6 @@ final class MusicBridge: ObservableObject {
     func cyclePlayMode() {
         audioPlayer.cyclePlayMode()
         playMode = audioPlayer.playMode
-        if let idx = PlayMode.allCases.firstIndex(of: playMode) {
-            UserDefaults.standard.set(idx, forKey: "playMode")
-        }
     }
 
     func toggleSortOrder() {
@@ -288,20 +277,27 @@ final class MusicBridge: ObservableObject {
         guard isPopoverOpen else { return }
         let url = audioPlayer.currentURL
         Task.detached(priority: .utility) {
-            let img: NSImage?
+            let imgData: Data?
             if let url {
-                if let cached = ArtworkCache.shared.artwork(for: url) {
-                    img = cached
+                if let cached = ArtworkCache.shared.artworkData(for: url) {
+                    imgData = cached
                 } else {
-                    let decoded = LibraryReader.artworkFromFile(url: url)
-                    if let decoded { ArtworkCache.shared.store(decoded, for: url) }
-                    img = decoded
+                    let data = LibraryReader.artworkDataFromFile(url: url)
+                    if let data { ArtworkCache.shared.store(data, for: url) }
+                    imgData = data
                 }
             } else {
-                img = nil
+                imgData = nil
             }
-            let box = SendableImage(image: img)
-            await MainActor.run { [weak self] in self?.currentArtwork = box.image }
+            // Construct NSImage on MainActor to avoid Sendable warning
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if let data = imgData, let img = NSImage(data: data) {
+                    self.currentArtwork = img
+                } else {
+                    self.currentArtwork = nil
+                }
+            }
         }
     }
 }

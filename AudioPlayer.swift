@@ -185,11 +185,6 @@ final class AudioPlayer: NSObject {
         shufflePosition = 0
     }
 
-    func setPlayMode(_ mode: PlayMode) {
-        playMode = mode
-        if mode == .shuffle { buildShuffleOrder(startAt: currentIndex) }
-    }
-
     func cyclePlayMode() {
         let all = PlayMode.allCases
         let idx = all.firstIndex(of: playMode)!

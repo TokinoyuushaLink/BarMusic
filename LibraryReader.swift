@@ -194,17 +194,16 @@ final class LibraryReader {
         return nil
     }
 
-    static func artworkFromFile(url: URL) -> NSImage? {
-        // Use AVURLAsset with synchronous metadata loading to avoid deprecated API
+    static func artworkDataFromFile(url: URL) -> Data? {
         let asset = AVURLAsset(url: url)
-        var result: NSImage? = nil
         let semaphore = DispatchSemaphore(value: 0)
+        var result: Data? = nil
         Task {
-            if let items = try? await asset.load(.commonMetadata) {
-                for item in items where item.commonKey == .commonKeyArtwork {
-                    if let data = try? await item.load(.value) as? Data,
-                       let img = NSImage(data: data) {
-                        result = img
+            if let metadata = try? await asset.load(.commonMetadata) {
+                for item in metadata {
+                    if item.commonKey == .commonKeyArtwork,
+                       let data = try? await item.load(.dataValue) {
+                        result = data
                         break
                     }
                 }
@@ -213,5 +212,10 @@ final class LibraryReader {
         }
         semaphore.wait()
         return result
+    }
+
+    static func artworkFromFile(url: URL) -> NSImage? {
+        guard let data = artworkDataFromFile(url: url) else { return nil }
+        return NSImage(data: data)
     }
 }

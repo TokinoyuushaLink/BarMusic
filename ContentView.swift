@@ -285,9 +285,8 @@ struct ContentView: View {
                                     }
                                     .buttonStyle(.plain)
                                 }
-                                .frame(width: 256, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(isActive ? theme.theme.color.opacity(0.85) : Color.clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
                             }
 
                             Divider().padding(.leading, group.isFolder ? 14 + CGFloat(max(0, group.indentLevel - 1)) * 12 + 56 : 50)
@@ -296,6 +295,7 @@ struct ContentView: View {
                 }
             }
         }
+        .scrollIndicators(.hidden)
         .frame(height: 410)
     }
 
@@ -434,6 +434,7 @@ struct ContentView: View {
             }
         }
         // Same fixed height as playlist section to keep popover stable
+        .scrollIndicators(.hidden)
         .frame(height: 554)
     }
 
