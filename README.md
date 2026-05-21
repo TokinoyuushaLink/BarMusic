@@ -23,6 +23,7 @@ macOS menubar Apple Music standlone control app\
 - 手动刷新，非必要不刷新
 - 带有基本的音乐控制功能，播放暂停，快进快退，乱序单曲顺序播放，按照专辑曲目顺序播放，音量条。
 - 顶部显示当前正在播放的歌曲
+- 左键单击显示主界面，右键单击显示设置
 
 ---
 
@@ -44,3 +45,4 @@ A menu bar controller app for Apple Music.
   - Album track order playback
   - Volume slider
 - Displays the currently playing song at the top
+- Left Click shows the main view , Right Click Shows the Settings
