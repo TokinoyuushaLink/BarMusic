@@ -3,7 +3,7 @@
 
 菜单栏apple music控制app\
 macOS menubar Apple Music standlone control app\
-<img width="342" height="682" alt="截屏2026-05-21 上午7 39 45" src="https://github.com/user-attachments/assets/41366862-bcbd-4fbd-89fe-29029f470482" />
+<img width="342" height="682" alt="截屏2026-05-21 下午12 56 58" src="https://github.com/user-attachments/assets/ca00baf8-4995-492e-95a1-397f6d1dd256" />
 <img width="342" height="682" alt="截屏2026-05-21 上午7 39 53" src="https://github.com/user-attachments/assets/14181d51-b1cc-4d63-ba9f-41862bc7ae92" />
 <img width="852" height="546" alt="截屏2026-05-21 上午7 46 09" src="https://github.com/user-attachments/assets/b360cb13-2353-4c54-9ef2-6ba0d32903cf" />
 
