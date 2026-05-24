@@ -18,8 +18,9 @@ struct PlaylistInfo: Identifiable, Equatable {
     var name: String
     var trackCount: Int
     var kind: PlaylistKind
-    var artworkImage: NSImage?
+    var artworkImage: NSImage?          // 运行时由 TrackArtworkCache 填充，不持久化
     var isFolder: Bool
+    var representativeTrackKey: String? // 第一首有封面的曲目 key，持久化到 playlists.cache
 
     static func == (lhs: PlaylistInfo, rhs: PlaylistInfo) -> Bool { lhs.id == rhs.id }
 
@@ -36,18 +37,18 @@ struct PlaylistInfo: Identifiable, Equatable {
     }
 }
 
-// 支持多层文件夹嵌套
 struct PlaylistGroup: Identifiable {
     let id: UUID = UUID()
-    var folderName: String          // "" = 顶层无文件夹
-    var folderArtwork: NSImage?
+    var folderName: String
+    var folderArtwork: NSImage?         // 运行时由 TrackArtworkCache 填充，不持久化
     var isFolder: Bool
-    var indentLevel: Int            // 0 = 顶层, 1 = 一级文件夹, 2 = 二级文件夹
-    var ancestorFolderNames: [String]  // 从根到直接父级的文件夹名列表
+    var indentLevel: Int
+    var ancestorFolderNames: [String]
     var playlists: [PlaylistInfo]
+    var representativeTrackKey: String? // 文件夹的代表曲目 key
 }
 
-// MARK: - 读取器
+// MARK: - LibraryReader
 
 final class LibraryReader {
 
@@ -58,24 +59,18 @@ final class LibraryReader {
         }
 
         let all = library.allPlaylists
-
-        // persistentID → playlist，方便查父级
         var byID: [NSNumber: ITLibPlaylist] = [:]
         for pl in all { byID[pl.persistentID] = pl }
 
-        // kind==3 是文件夹，kind==0/1/2/5 是普通/智能列表
         let isFolder: (ITLibPlaylist) -> Bool = { $0.kind.rawValue == 3 }
 
-        // 过滤出用户可见的非文件夹列表
         let visiblePlaylists = all.filter { pl in
             if pl.isMaster { return false }
             if isFolder(pl) { return false }
-            let dk = pl.distinguishedKind
-            if dk != .kindNone { return false }   // 只保留普通用户列表，排除音乐资料库等系统列表
+            if pl.distinguishedKind != .kindNone { return false }
             return true
         }
 
-        // 计算一个 playlist 相对于根的缩进深度
         func indentDepth(_ pl: ITLibPlaylist) -> Int {
             var depth = 0
             var current = pl
@@ -86,28 +81,8 @@ final class LibraryReader {
             return depth
         }
 
-        // 找到某个 playlist 最顶层的文件夹祖先
-        func topAncestorFolder(_ pl: ITLibPlaylist) -> ITLibPlaylist? {
-            var result: ITLibPlaylist? = nil
-            var current = pl
-            while let pid = current.parentID, let parent = byID[pid] {
-                if isFolder(parent) { result = parent }
-                current = parent
-            }
-            return result
-        }
-
-        // 找直接父文件夹
-        func directParentFolder(_ pl: ITLibPlaylist) -> ITLibPlaylist? {
-            guard let pid = pl.parentID, let parent = byID[pid], isFolder(parent) else { return nil }
-            return parent
-        }
-
-        // 收集所有文件夹，按层级排序（深度优先，保持 Music.app 原始顺序）
-        // 策略：按 DFS 顺序遍历文件夹树，每个文件夹后面跟着它直属的子列表
         var groups: [PlaylistGroup] = []
 
-        // ancestors: names of all folders from root down to (not including) current folder
         func appendFolder(_ folder: ITLibPlaylist, depth: Int, ancestors: [String]) {
             let folderName = folder.name
 
@@ -122,17 +97,19 @@ final class LibraryReader {
 
             guard !children.isEmpty || !subFolders.isEmpty else { return }
 
-            let folderArtwork = children.compactMap { $0.artworkImage }.first
+            // 文件夹的代表 key = 第一个有 representativeTrackKey 的子列表的 key
+            let folderRepKey = children.compactMap { $0.representativeTrackKey }.first
+
             groups.append(PlaylistGroup(
                 folderName: folderName,
-                folderArtwork: folderArtwork,
+                folderArtwork: nil,         // 不在构建阶段读封面，由 TrackArtworkCache 提供
                 isFolder: true,
                 indentLevel: depth,
                 ancestorFolderNames: ancestors,
-                playlists: children
+                playlists: children,
+                representativeTrackKey: folderRepKey
             ))
 
-            // Sub-folders get current folder appended to their ancestors
             for sub in subFolders {
                 appendFolder(sub, depth: depth + 1, ancestors: ancestors + [folderName])
             }
@@ -158,12 +135,15 @@ final class LibraryReader {
                 isFolder: false,
                 indentLevel: 0,
                 ancestorFolderNames: [],
-                playlists: topLevel
+                playlists: topLevel,
+                representativeTrackKey: topLevel.compactMap { $0.representativeTrackKey }.first
             ))
         }
 
         return groups
     }
+
+    // MARK: - makeInfo（不读封面，只记录代表曲目 key）
 
     private static func makeInfo(_ playlist: ITLibPlaylist) -> PlaylistInfo {
         let kind: PlaylistInfo.PlaylistKind
@@ -172,32 +152,31 @@ final class LibraryReader {
         case 1:    kind = playlist.distinguishedKind == .kindNone ? .user : .library
         default:   kind = .user
         }
-        let artwork = artworkFromTracks(playlist.items)
+
+        // 找第一首有文件路径的曲目作为代表（构建时不读 artwork，由 TrackArtworkCache 负责）
+        let repKey: String? = playlist.items.prefix(10).compactMap { item -> String? in
+            guard item.location != nil else { return nil }
+            return TrackArtworkCache.shared.trackKey(item)
+        }.first
+
         return PlaylistInfo(
             id: UUID(),
             libraryID: playlist.persistentID,
             name: playlist.name,
             trackCount: playlist.items.count,
             kind: kind,
-            artworkImage: artwork,
-            isFolder: false
+            artworkImage: nil,
+            isFolder: false,
+            representativeTrackKey: repKey
         )
     }
 
-    // MARK: - 封面
-
-    static func artworkFromTracks(_ tracks: [ITLibMediaItem]) -> NSImage? {
-        for track in tracks.prefix(5) {
-            guard let url = track.location else { continue }
-            if let img = artworkFromFile(url: url) { return img }
-        }
-        return nil
-    }
+    // MARK: - 封面工具（供 TrackArtworkCache 构建阶段使用）
 
     static func artworkDataFromFile(url: URL) -> Data? {
         let asset = AVURLAsset(url: url)
         let semaphore = DispatchSemaphore(value: 0)
-        var result: Data? = nil
+        var result: Data?
         Task {
             if let metadata = try? await asset.load(.commonMetadata) {
                 for item in metadata {

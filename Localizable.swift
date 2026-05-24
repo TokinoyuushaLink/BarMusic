@@ -35,11 +35,15 @@ enum L {
     static var modeShuffle:     String { isChinese ? "乱序" : "Shuffle" }
     static var modeRepeatOne:   String { isChinese ? "单曲" : "Repeat" }
 
+    // Build progress
+    static var buildingCache:    String { isChinese ? "正在构建缓存..." : "Building cache..." }
+
     // Bottom bar
     static var refreshPlaylists: String { isChinese ? "刷新列表" : "Refresh Playlists" }
 
     // Settings menu
     static var settings:         String { isChinese ? "设置"     : "Settings" }
+    static var waveformBars:     String { isChinese ? "波形显示"  : "Waveform Bars" }
     static var themeColor:       String { isChinese ? "主题色"   : "Theme Color" }
     static var themeRed:         String { isChinese ? "红色"     : "Red" }
     static var themeOrange:      String { isChinese ? "橙色"     : "Orange" }

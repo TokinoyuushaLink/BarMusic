@@ -73,6 +73,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             btn.target  = self
             btn.action  = #selector(handleClick(_:))
             btn.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            // 关闭 hover 高亮：鼠标划过时不触发背景重绘
+            (btn.cell as? NSButtonCell)?.showsBorderOnlyWhileMouseInside = false
         }
 
         // Main popover
@@ -81,11 +83,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.behavior       = .transient
         popover.animates       = true
         popover.delegate       = self
-        popover.contentViewController = NSHostingController(
-            rootView: ContentView()
-                .environmentObject(music)
-                .environmentObject(theme)
-        )
     }
 
     @objc func handleClick(_ sender: NSStatusBarButton) {
@@ -103,6 +100,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            popover.contentViewController = NSHostingController(
+                rootView: ContentView()
+                    .environmentObject(music)
+                    .environmentObject(theme)
+            )
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
@@ -130,6 +132,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         menu.addItem(.separator())
 
+        // Waveform toggle
+        let waveItem = NSMenuItem(title: L.waveformBars,
+                                  action: #selector(toggleWaveform),
+                                  keyEquivalent: "")
+        waveItem.target = self
+        waveItem.state  = music.showWaveform ? .on : .off
+        menu.addItem(waveItem)
+
+        menu.addItem(.separator())
+
         // Refresh
         let refresh = NSMenuItem(title: L.refreshPlaylists,
                                  action: #selector(refreshPlaylists),
@@ -150,6 +162,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusItem.button?.performClick(nil)
         // Clear menu after use so left-click works normally next time
         DispatchQueue.main.async { self.statusItem.menu = nil }
+    }
+
+    @objc func toggleWaveform() {
+        music.toggleWaveform()
     }
 
     @objc func selectTheme(_ sender: NSMenuItem) {
@@ -173,6 +189,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         music.popoverDidClose()
+        popover.contentViewController = nil
     }
 }
 

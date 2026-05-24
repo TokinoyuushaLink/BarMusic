@@ -43,11 +43,11 @@ struct ContentView: View {
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(theme.theme.color.opacity(0.15))
+                        .fill(Color.secondary.opacity(0.12))
                         .frame(width: 48, height: 48)
-                    Image(systemName: music.isPlaying ? "music.note" : "music.note.list")
+                    Image(systemName: "music.note")
                         .font(.system(size: 20))
-                        .foregroundColor(.pink)
+                        .foregroundColor(.secondary)
                 }
             }
             VStack(alignment: .leading, spacing: 3) {
@@ -71,9 +71,13 @@ struct ContentView: View {
                 }
             }
             Spacer()
-            Circle()
-                .fill(music.isPlaying ? Color.green : Color.gray.opacity(0.4))
-                .frame(width: 7, height: 7)
+            if music.showWaveform {
+                WaveformBarsView(store: music.waveformStore, isPlaying: music.isPlaying)
+            } else {
+                Circle()
+                    .fill(music.isPlaying ? Color.green : Color.gray.opacity(0.4))
+                    .frame(width: 7, height: 7)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -146,22 +150,23 @@ struct ContentView: View {
     // MARK: - Playlist Header
 
     var playlistHeader: some View {
-        HStack(alignment: .center) {
-            Image(systemName: "music.note.list")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-            Text(L.playlists)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.primary)
+        VStack(spacing: 0) {
+            HStack(alignment: .center) {
+                Image(systemName: "music.note.list")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Text(L.playlists)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.primary)
 
-            Spacer()
+                Spacer()
 
-            ZStack(alignment: .trailing) {
                 if music.isLoadingPlaylists {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .scaleEffect(0.4)
-                        .frame(width: 30, height: 14, alignment: .trailing)
+                    Text(music.buildProgress > 0 ? "\(Int(music.buildProgress * 100))%" : "···")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(height: 14)
+                        .animation(nil, value: music.buildProgress)
                 } else {
                     let total = music.playlistGroups.reduce(0) { $0 + $1.playlists.count }
                     if total > 0 {
@@ -172,140 +177,81 @@ struct ContentView: View {
                     }
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 7)
+            .padding(.bottom, music.isLoadingPlaylists ? 4 : 7)
+
+            if music.isLoadingPlaylists {
+                VStack(alignment: .leading, spacing: 2) {
+                    if !music.buildStatusText.isEmpty {
+                        Text(music.buildStatusText)
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                    ProgressView(value: music.buildProgress, total: 1.0)
+                        .progressViewStyle(.linear)
+                        .tint(theme.theme.color)
+                        .scaleEffect(x: 1, y: 0.8, anchor: .center)
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
     }
 
     // MARK: - Playlist Section
 
     var playlistSection: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(music.playlistGroups) { group in
-                    if group.isFolder && !music.isGroupHidden(group) {
-                        let baseIndent: CGFloat = 14 + CGFloat(max(0, group.indentLevel - 1)) * 12
-                        let collapsed = music.isFolderCollapsed(group.folderName)
-
-                        // Folder header row with collapse chevron
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                music.toggleFolderCollapse(group.folderName)
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundColor(.secondary.opacity(0.7))
-                                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-                                    .animation(.easeInOut(duration: 0.18), value: collapsed)
-                                    .frame(width: 12)
-                                if let img = group.folderArtwork {
-                                    Image(nsImage: img)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(width: 14, height: 14)
-                                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                                } else {
-                                    Image(systemName: "folder.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(music.flatPlaylistItems) { item in
+                        switch item {
+                        case .folderHeader(let group, let collapsed):
+                            FolderHeaderRowView(
+                                group: group,
+                                collapsed: collapsed,
+                                themeColor: theme.theme.color
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    music.toggleFolderCollapse(group.folderName)
                                 }
-                                Text(group.folderName)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(.secondary)
-                                Spacer()
                             }
-                            .padding(.leading, baseIndent)
-                            .padding(.trailing, 14)
-                            .padding(.top, 6)
-                            .padding(.bottom, 3)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(height: 26)  // fixed height prevents scroll jitter
-                    }
-
-                    // Playlist rows — hidden when folder is collapsed
-                    if !music.isGroupHidden(group) && (!group.isFolder || !music.isFolderCollapsed(group.folderName)) {
-                        ForEach(group.playlists) { pl in
-                            Group {
-                                let isActive = pl.name == music.currentPlaylistName
-                                HStack(spacing: 0) {
-                                    Button {
-                                        music.playPlaylist(named: pl.name)
-                                    } label: {
-                                        HStack(spacing: 8) {
-                                            if let img = pl.artworkImage {
-                                                Image(nsImage: img)
-                                                    .resizable()
-                                                    .aspectRatio(contentMode: .fill)
-                                                    .frame(width: 28, height: 28)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                                            } else {
-                                                ZStack {
-                                                    RoundedRectangle(cornerRadius: 4)
-                                                        .fill(isActive ? Color.white.opacity(0.25) : Color.pink.opacity(0.12))
-                                                        .frame(width: 28, height: 28)
-                                                    Image(systemName: pl.kind.icon)
-                                                        .font(.system(size: 12))
-                                                        .foregroundColor(isActive ? .white : .pink)
-                                                }
-                                            }
-                                            Text(pl.name)
-                                                .font(.system(size: 12))
-                                                .foregroundColor(isActive ? .white : .primary)
-                                                .lineLimit(1)
-                                            Spacer()
-                                            if isActive && music.isPlaying {
-                                                Image(systemName: "speaker.wave.2.fill")
-                                                    .font(.system(size: 10))
-                                                    .foregroundColor(.white.opacity(0.9))
-                                            } else {
-                                                Text("\(pl.trackCount)")
-                                                    .font(.system(size: 10, design: .monospaced))
-                                                    .foregroundColor(isActive ? .white.opacity(0.8) : .secondary)
-                                            }
-                                        }
-                                        .padding(.leading, group.isFolder ? 14 + CGFloat(max(0, group.indentLevel - 1)) * 12 + 20 : 14)
-                                        .padding(.trailing, 4)
-                                        .padding(.vertical, 5)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    Button {
-                                        music.openPlaylistDetail(named: pl.name)
-                                    } label: {
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 10, weight: .medium))
-                                            .foregroundColor(isActive ? .white.opacity(0.7) : .secondary.opacity(0.6))
-                                            .frame(width: 20, height: 38)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
+                        case .playlist(let group, let pl):
+                            PlaylistItemRowView(
+                                group: group,
+                                pl: pl,
+                                isActive: pl.name == music.currentPlaylistName,
+                                isPlaying: music.isPlaying,
+                                themeColor: theme.theme.color,
+                                onPlay:  { music.playPlaylist(named: pl.name) },
+                                onDrill: {
+                                    music.playlistScrollID = pl.name
+                                    music.openPlaylistDetail(named: pl.name)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(isActive ? theme.theme.color.opacity(0.85) : Color.clear)
-                            }
-
-                            Divider().padding(.leading, group.isFolder ? 14 + CGFloat(max(0, group.indentLevel - 1)) * 12 + 56 : 50)
+                            )
                         }
                     }
                 }
             }
+            .scrollIndicators(.hidden)
+            .frame(height: 410)
+            .onAppear {
+                if let id = music.playlistScrollID {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
         }
-        .scrollIndicators(.hidden)
-        .frame(height: 410)
     }
 
     // MARK: - Drill-down Header
 
     func drillHeader(playlistName: String) -> some View {
-        let artwork: NSImage? = music.playlistGroups
+        let repKey = music.playlistGroups
             .flatMap { $0.playlists }
             .first { $0.name == playlistName }?
-            .artworkImage
+            .representativeTrackKey ?? ""
         return HStack(spacing: 8) {
             Button {
                 music.closePlaylistDetail()
@@ -318,8 +264,8 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
 
-            // Artwork thumbnail
-            if let img = artwork {
+            // Artwork thumbnail — 从 TrackArtworkCache 同步读取
+            if let img = TrackArtworkCache.shared.image(forKey: repKey) {
                 Image(nsImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -328,11 +274,11 @@ struct ContentView: View {
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: 5)
-                        .fill(theme.theme.color.opacity(0.12))
+                        .fill(Color.secondary.opacity(0.12))
                         .frame(width: 28, height: 28)
                     Image(systemName: "music.note.list")
                         .font(.system(size: 12))
-                        .foregroundColor(.pink)
+                        .foregroundColor(.secondary)
                 }
             }
 
@@ -364,7 +310,7 @@ struct ContentView: View {
 
     var drillSection: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
                 if music.isLoadingDrill {
                     HStack {
                         Spacer()
@@ -377,65 +323,22 @@ struct ContentView: View {
                 } else {
                     let tracks = music.sortedDrillTracks
                     ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, track in
-                        Button {
+                        TrackRowView(
+                            track: track,
+                            index: idx,
+                            isCurrent: isCurrentDrillTrack(track),
+                            isPlaying: music.isPlaying,
+                            showTrackNumber: music.sortByTrackOrder,
+                            themeColor: theme.theme.color
+                        ) {
                             music.playFromDrill(index: idx)
-                        } label: {
-                            HStack(spacing: 8) {
-                                // 轨道号
-                                if music.sortByTrackOrder && track.trackNumber > 0 {
-                                    Text(track.discNumber > 1
-                                         ? "\(track.discNumber)-\(track.trackNumber)"
-                                         : "\(track.trackNumber)")
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundColor(isCurrentDrillTrack(track) ? .white.opacity(0.6) : .secondary)
-                                        .frame(width: 26, alignment: .trailing)
-                                } else {
-                                    Text("\(idx + 1)")
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundColor(isCurrentDrillTrack(track) ? .white.opacity(0.6) : .secondary.opacity(0.5))
-                                        .frame(width: 26, alignment: .trailing)
-                                }
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 4) {
-                                        Text(track.title)
-                                            .font(.system(size: 12))
-                                            .foregroundColor(
-                                                isCurrentDrillTrack(track) ? .white : .primary
-                                            )
-                                            .lineLimit(1)
-                                        if isCurrentDrillTrack(track) && music.isPlaying {
-                                            Image(systemName: "speaker.wave.2.fill")
-                                                .font(.system(size: 9))
-                                                .foregroundColor(.white.opacity(0.9))
-                                        }
-                                    }
-                                    Text(track.artist)
-                                        .font(.system(size: 10))
-                                        .foregroundColor(isCurrentDrillTrack(track) ? .white.opacity(0.75) : .secondary)
-                                        .lineLimit(1)
-                                }
-
-                                Spacer()
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 5)
-                            .background(
-                                isCurrentDrillTrack(track)
-                                    ? theme.theme.color.opacity(0.85) : Color.clear
-                            )
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
-
-                        Divider().padding(.leading, 48)
                     }
                 }
             }
         }
-        // Same fixed height as playlist section to keep popover stable
         .scrollIndicators(.hidden)
-        .frame(height: 554)
+        .frame(height: 558)
     }
 
     // MARK: - Helpers
@@ -470,21 +373,21 @@ struct ContentView: View {
 struct VolumeView: View {
     @EnvironmentObject var music: MusicBridge
     @EnvironmentObject var theme: ThemeManager
+    @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "speaker.fill")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
-            Slider(
+            VolumeSliderControl(
                 value: Binding(
                     get: { Double(music.volume) },
                     set: { music.setVolume(Float($0)) }
                 ),
-                in: 0...1
+                fillColor: NSColor(theme.theme.color),
+                isDark: colorScheme == .dark
             )
-            .controlSize(.small)
-            .tint(theme.theme.color)
             Image(systemName: "speaker.wave.3.fill")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
@@ -495,5 +398,327 @@ struct VolumeView: View {
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 10)
+    }
+}
+// MARK: - FolderHeaderRowView
+
+struct FolderHeaderRowView: View {
+    let group: PlaylistGroup
+    let collapsed: Bool
+    let themeColor: Color
+    let onTap: () -> Void
+
+    var body: some View {
+        let indent: CGFloat = 14 + CGFloat(max(0, group.indentLevel - 1)) * 12
+        Button(action: onTap) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .animation(.easeInOut(duration: 0.18), value: collapsed)
+                    .frame(width: 12)
+                if let img = TrackArtworkCache.shared.image(forKey: group.representativeTrackKey ?? "") {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 14, height: 14)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                } else {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                Text(group.folderName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.leading, indent)
+            .padding(.trailing, 14)
+            .padding(.top, 6)
+            .padding(.bottom, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(height: 26)
+    }
+}
+
+// MARK: - PlaylistItemRowView
+
+struct PlaylistItemRowView: View {
+    let group: PlaylistGroup
+    let pl: PlaylistInfo
+    let isActive: Bool
+    let isPlaying: Bool
+    let themeColor: Color
+    let onPlay:  () -> Void
+    let onDrill: () -> Void
+
+    var body: some View {
+        let leadingPad: CGFloat = group.isFolder
+            ? 14 + CGFloat(max(0, group.indentLevel - 1)) * 12 + 20
+            : 14
+        let dividerPad: CGFloat = group.isFolder
+            ? 14 + CGFloat(max(0, group.indentLevel - 1)) * 12 + 56
+            : 50
+
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Button(action: onPlay) {
+                    HStack(spacing: 8) {
+                        if let img = TrackArtworkCache.shared.image(forKey: pl.representativeTrackKey ?? "") {
+                            Image(nsImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 28, height: 28)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        } else {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(isActive ? Color.white.opacity(0.25) : Color.secondary.opacity(0.12))
+                                    .frame(width: 28, height: 28)
+                                Image(systemName: pl.kind.icon)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(isActive ? .white : .secondary)
+                            }
+                        }
+                        Text(pl.name)
+                            .font(.system(size: 12))
+                            .foregroundColor(isActive ? .white : .primary)
+                            .lineLimit(1)
+                        Spacer()
+                        if isActive && isPlaying {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.9))
+                        } else {
+                            Text("\(pl.trackCount)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(isActive ? .white.opacity(0.8) : .secondary)
+                        }
+                    }
+                    .padding(.leading, leadingPad)
+                    .padding(.trailing, 4)
+                    .padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onDrill) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(isActive ? .white.opacity(0.7) : .secondary.opacity(0.6))
+                        .frame(width: 24, height: 38)
+                        .padding(.trailing, 6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isActive ? themeColor.opacity(0.85) : Color.clear)
+
+            Divider().padding(.leading, dividerPad)
+        }
+        .id(pl.name)
+    }
+}
+
+// MARK: - TrackRowView
+// 独立 struct：props 不变时 SwiftUI 跳过 body 重算，LazyVStack 下只有可见行参与渲染
+
+struct TrackRowView: View {
+    let track: PlaylistTrackItem
+    let index: Int
+    let isCurrent: Bool
+    let isPlaying: Bool
+    let showTrackNumber: Bool
+    let themeColor: Color
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 8) {
+
+                // 封面（28pt，@2x = 56px，与 thumbSize 一致）
+                if let img = TrackArtworkCache.shared.image(for: track) {
+                    Image(nsImage: img)
+                        .resizable()
+                        .interpolation(.medium)
+                        .frame(width: 28, height: 28)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .opacity(isCurrent ? 0.88 : 1.0)
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(isCurrent ? Color.white.opacity(0.15) : Color.secondary.opacity(0.12))
+                            .frame(width: 28, height: 28)
+                        Image(systemName: "music.note")
+                            .font(.system(size: 11))
+                            .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary)
+                    }
+                }
+
+                // 标题 + 艺术家
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(track.title)
+                            .font(.system(size: 12))
+                            .foregroundColor(isCurrent ? .white : .primary)
+                            .lineLimit(1)
+                        if isCurrent && isPlaying {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.9))
+                        }
+                    }
+                    Text(track.artist)
+                        .font(.system(size: 10))
+                        .foregroundColor(isCurrent ? .white.opacity(0.75) : .secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                // 编号右对齐
+                if showTrackNumber && track.trackNumber > 0 {
+                    Text(track.discNumber > 1
+                         ? "\(track.discNumber)-\(track.trackNumber)"
+                         : "\(track.trackNumber)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary)
+                        .frame(width: 28, alignment: .trailing)
+                } else {
+                    Text("\(index + 1)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary.opacity(0.5))
+                        .frame(width: 28, alignment: .trailing)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+            .background(isCurrent ? themeColor.opacity(0.85) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+
+        Divider().padding(.leading, 56)
+    }
+}
+
+// MARK: - WaveformBarsView
+
+struct WaveformBarsView: View {
+    @ObservedObject var store: WaveformStore
+    let isPlaying: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var liveIsPlaying: Bool = false
+
+    private let barW: CGFloat = 2
+    private let gap:  CGFloat = 2
+    private let maxH: CGFloat = 14
+    private let minH: CGFloat = 3
+
+    private var barColor: Color {
+        colorScheme == .dark ? Color.green : Color.primary.opacity(0.45)
+    }
+
+    var body: some View {
+        HStack(spacing: gap) {
+            ForEach(0..<6, id: \.self) { i in
+                let val = i < store.bands.count ? CGFloat(store.bands[i]) : 0
+                let h   = liveIsPlaying ? minH + val * (maxH - minH) : minH
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(barColor)
+                    .frame(width: barW, height: h)
+            }
+        }
+        .frame(width: 6 * barW + 5 * gap, height: maxH, alignment: .center)
+        .onAppear { liveIsPlaying = isPlaying }
+        .onChange(of: isPlaying) { newVal in
+            if newVal {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    liveIsPlaying = true
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.8)) {
+                    liveIsPlaying = false
+                }
+            }
+        }
+    }
+}
+
+// MARK: - VolumeSliderControl
+// NSViewRepresentable wrapping NSSlider with a custom NSSliderCell so we can
+// control the track background color separately in light and dark mode.
+
+private final class CustomSliderCell: NSSliderCell {
+    var fillColor: NSColor = .systemBlue
+    var isDark: Bool = false
+
+    override func drawBar(inside rect: NSRect, flipped: Bool) {
+        let trackH: CGFloat = 3
+        let r = NSRect(x: rect.minX,
+                       y: rect.midY - trackH / 2,
+                       width: rect.width,
+                       height: trackH)
+        let radius = trackH / 2
+
+        // Track background — slightly darker in light mode, slightly lighter in dark mode
+        let bgColor: NSColor = isDark
+            ? .white.withAlphaComponent(0.22)
+            : .black.withAlphaComponent(0.14)
+        bgColor.setFill()
+        NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius).fill()
+
+        // Filled portion
+        let ratio = CGFloat((doubleValue - minValue) / (maxValue - minValue))
+        let filledW = r.width * ratio
+        guard filledW > 0 else { return }
+        let filledRect = NSRect(x: r.minX, y: r.minY, width: filledW, height: r.height)
+        fillColor.setFill()
+        NSBezierPath(roundedRect: filledRect, xRadius: radius, yRadius: radius).fill()
+    }
+}
+
+struct VolumeSliderControl: NSViewRepresentable {
+    @Binding var value: Double
+    var fillColor: NSColor
+    var isDark: Bool
+
+    func makeNSView(context: Context) -> NSSlider {
+        let slider = NSSlider()
+        slider.cell = CustomSliderCell()
+        slider.minValue = 0
+        slider.maxValue = 1
+        slider.doubleValue = value
+        slider.controlSize = .small
+        slider.isContinuous = true
+        slider.target = context.coordinator
+        slider.action = #selector(Coordinator.valueChanged(_:))
+        applyCell(slider)
+        return slider
+    }
+
+    func updateNSView(_ nsView: NSSlider, context: Context) {
+        if nsView.doubleValue != value { nsView.doubleValue = value }
+        applyCell(nsView)
+        nsView.needsDisplay = true
+    }
+
+    private func applyCell(_ slider: NSSlider) {
+        guard let cell = slider.cell as? CustomSliderCell else { return }
+        cell.fillColor = fillColor
+        cell.isDark    = isDark
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(value: $value) }
+
+    final class Coordinator: NSObject {
+        var value: Binding<Double>
+        init(value: Binding<Double>) { self.value = value }
+        @objc func valueChanged(_ sender: NSSlider) { value.wrappedValue = sender.doubleValue }
     }
 }
