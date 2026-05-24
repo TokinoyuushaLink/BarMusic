@@ -230,19 +230,18 @@ struct ContentView: View {
             .flatMap { $0.playlists }
             .first { $0.name == playlistName }?
             .representativeTrackKey ?? ""
-        return HStack(spacing: 8) {
-            Button {
-                music.closePlaylistDetail()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(theme.theme.color)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+        let backButton = Button {
+            music.closePlaylistDetail()
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(theme.theme.color)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
 
-            // Artwork thumbnail — 从 TrackArtworkCache 同步读取
+        let artworkView = Group {
             if let img = TrackArtworkCache.shared.image(forKey: repKey) {
                 Image(nsImage: img)
                     .resizable()
@@ -259,25 +258,34 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                 }
             }
+        }
 
-            Text(playlistName)
-                .font(.system(size: 13, weight: .semibold))
-                .lineLimit(1)
+        let countView = ZStack(alignment: .trailing) {
+            if music.isLoadingDrill {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .scaleEffect(0.4)
+                    .frame(width: 30, height: 14, alignment: .trailing)
+            } else {
+                Text("\(music.drillTracks.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(height: 14)
+            }
+        }
 
-            Spacer()
-
-            ZStack(alignment: .trailing) {
-                if music.isLoadingDrill {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .scaleEffect(0.4)
-                        .frame(width: 30, height: 14, alignment: .trailing)
-                } else {
-                    Text("\(music.drillTracks.count)")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .frame(height: 14)
-                }
+        return ZStack {
+            HStack(spacing: 6) {
+                artworkView
+                Text(playlistName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+            }
+            HStack {
+                backButton
+                    .offset(x: -6)
+                Spacer()
+                countView
             }
         }
         .padding(.horizontal, 14)
@@ -537,10 +545,12 @@ struct TrackRowView: View {
                                 .font(.system(size: 12))
                                 .foregroundColor(isCurrent ? .white : .primary)
                                 .lineLimit(1)
+                                .truncationMode(.tail)
                             if isCurrent && isPlaying {
                                 Image(systemName: "speaker.wave.2.fill")
                                     .font(.system(size: 9))
                                     .foregroundColor(.white.opacity(0.9))
+                                    .fixedSize()
                             }
                         }
                         Text(track.artist)
@@ -548,8 +558,7 @@ struct TrackRowView: View {
                             .foregroundColor(isCurrent ? .white.opacity(0.75) : .secondary)
                             .lineLimit(1)
                     }
-
-                    Spacer()
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     // 编号右对齐
                     if showTrackNumber && track.trackNumber > 0 {
