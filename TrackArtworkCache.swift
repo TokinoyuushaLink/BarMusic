@@ -25,8 +25,10 @@ final class TrackArtworkCache {
     static let rawByteCount = thumbSize * thumbSize * 4
 
     // ── L1 内存池 ──────────────────────────────────────────
-    // key = hash8（8位16进制），value = 已渲染的 NSImage（共享，多曲目同封面只存1份）
+    // key = hash8（8位16进制），value = 已渲染的 NSImage（供非热路径使用）
     private var pool: [String: NSImage] = [:]
+    // 热路径专用：直接存 CGImage，跳过 NSImage→CGImage 转换开销
+    private var cgPool: [String: CGImage] = [:]
     // key = trackKey，value = hash8（用于从曲目快速查图）
     private var trackIndex: [String: String] = [:]
     private let lock = NSLock()
@@ -77,6 +79,7 @@ final class TrackArtworkCache {
 
         var loaded = 0
         var newPool: [String: NSImage] = [:]
+        var newCGPool: [String: CGImage] = [:]
         var newIndex: [String: String] = [:]
 
         for (trackKey, hash8) in index {
@@ -84,14 +87,16 @@ final class TrackArtworkCache {
             // 已加载过相同 hash8 的图就复用，不重复 mmap
             if newPool[hash8] != nil { continue }
             guard let url = rawURL(hash8: hash8),
-                  let img = imageFromRawFile(url: url)
+                  let (img, cgImg) = imageFromRawFile(url: url)
             else { continue }
             newPool[hash8] = img
+            newCGPool[hash8] = cgImg
             loaded += 1
         }
 
         lock.lock()
         pool = newPool
+        cgPool = newCGPool
         trackIndex = newIndex
         lock.unlock()
 
@@ -180,8 +185,9 @@ final class TrackArtworkCache {
         trackIndex = newIndex
         for (_, hash8) in newIndex where pool[hash8] == nil {
             if let rawURL = rawURL(hash8: hash8),
-               let img = imageFromRawFile(url: rawURL) {
+               let (img, cgImg) = imageFromRawFile(url: rawURL) {
                 pool[hash8] = img
+                cgPool[hash8] = cgImg
             }
         }
         lock.unlock()
@@ -208,11 +214,29 @@ final class TrackArtworkCache {
         return img
     }
 
+    // 热路径专用：直接返回 CGImage，避免 NSImage→CGImage 转换
+    // 配合 Image(decorative: cg, scale: 2.0) 使用，56px@2x = 28pt，零缩放
+    func cgImage(for item: PlaylistTrackItem) -> CGImage? {
+        let key = trackKey(title: item.title, artist: item.artist, album: item.album)
+        lock.lock()
+        let img = trackIndex[key].flatMap { cgPool[$0] }
+        lock.unlock()
+        return img
+    }
+
+    func cgImage(forKey key: String) -> CGImage? {
+        lock.lock()
+        let img = trackIndex[key].flatMap { cgPool[$0] }
+        lock.unlock()
+        return img
+    }
+
     // MARK: - 清空（手动刷新时）
 
     func invalidate() {
         lock.lock()
         pool.removeAll()
+        cgPool.removeAll()
         trackIndex.removeAll()
         lock.unlock()
         if let dir = artworkDir {
@@ -285,17 +309,15 @@ final class TrackArtworkCache {
         return Data(bytes: ptr, count: bytesPerRow * size)
     }
 
-    /// 从 .raw 文件 mmap 读取，构造 NSImage（零拷贝，无 PNG 解码）
-    private func imageFromRawFile(url: URL) -> NSImage? {
+    /// 从 .raw 文件 mmap 读取，返回 (NSImage, CGImage)（零拷贝，无 PNG 解码）
+    private func imageFromRawFile(url: URL) -> (NSImage, CGImage)? {
         let size = Self.thumbSize
         let byteCount = Self.rawByteCount
 
-        // 用 mmap 映射，避免把所有文件内容拷贝进堆
         guard let mapped = try? Data(contentsOf: url, options: .mappedIfSafe),
               mapped.count == byteCount
         else { return nil }
 
-        // 直接从 raw bytes 构造 CGImage，零解码
         let provider = CGDataProvider(data: mapped as CFData)!
         guard let cgImg = CGImage(
             width: size, height: size,
@@ -313,6 +335,6 @@ final class TrackArtworkCache {
         ) else { return nil }
 
         let img = NSImage(cgImage: cgImg, size: NSSize(width: size, height: size))
-        return img
+        return (img, cgImg)
     }
 }

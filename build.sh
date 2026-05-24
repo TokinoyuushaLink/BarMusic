@@ -106,6 +106,7 @@ swiftc \
     "$SCRIPT_DIR/SafeKVC.swift" \
     "$SCRIPT_DIR/Localizable.swift" \
     "$SCRIPT_DIR/TrackArtworkCache.swift" \
+    "$SCRIPT_DIR/HighPerfListView.swift" \
     -o "$BIN"
 
 # 5. 生成 Info.plist

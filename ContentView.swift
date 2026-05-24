@@ -203,46 +203,24 @@ struct ContentView: View {
     // MARK: - Playlist Section
 
     var playlistSection: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(music.flatPlaylistItems) { item in
-                        switch item {
-                        case .folderHeader(let group, let collapsed):
-                            FolderHeaderRowView(
-                                group: group,
-                                collapsed: collapsed,
-                                themeColor: theme.theme.color
-                            ) {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    music.toggleFolderCollapse(group.folderName)
-                                }
-                            }
-                        case .playlist(let group, let pl):
-                            PlaylistItemRowView(
-                                group: group,
-                                pl: pl,
-                                isActive: pl.name == music.currentPlaylistName,
-                                isPlaying: music.isPlaying,
-                                themeColor: theme.theme.color,
-                                onPlay:  { music.playPlaylist(named: pl.name) },
-                                onDrill: {
-                                    music.playlistScrollID = pl.name
-                                    music.openPlaylistDetail(named: pl.name)
-                                }
-                            )
-                        }
-                    }
+        PlaylistNSTableView(
+            items: music.flatPlaylistItems,
+            currentPlaylistName: music.currentPlaylistName,
+            isPlaying: music.isPlaying,
+            themeColor: theme.theme.color,
+            scrollToName: music.playlistScrollID,
+            onPlay: { music.playPlaylist(named: $0) },
+            onDrill: {
+                music.playlistScrollID = $0
+                music.openPlaylistDetail(named: $0)
+            },
+            onToggleFolder: { folderName in
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    music.toggleFolderCollapse(folderName)
                 }
             }
-            .scrollIndicators(.hidden)
-            .frame(height: 410)
-            .onAppear {
-                if let id = music.playlistScrollID {
-                    proxy.scrollTo(id, anchor: .center)
-                }
-            }
-        }
+        )
+        .frame(height: 410)
     }
 
     // MARK: - Drill-down Header
@@ -309,36 +287,31 @@ struct ContentView: View {
     // MARK: - Drill-down Track List
 
     var drillSection: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
-                if music.isLoadingDrill {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .scaleEffect(0.7)
-                            .padding(.vertical, 40)
-                        Spacer()
-                    }
-                } else {
-                    let tracks = music.sortedDrillTracks
-                    ForEach(Array(tracks.enumerated()), id: \.element.id) { idx, track in
-                        TrackRowView(
-                            track: track,
-                            index: idx,
-                            isCurrent: isCurrentDrillTrack(track),
-                            isPlaying: music.isPlaying,
-                            showTrackNumber: music.sortByTrackOrder,
-                            themeColor: theme.theme.color
-                        ) {
-                            music.playFromDrill(index: idx)
-                        }
-                    }
-                }
+        drillContent.frame(height: 558)
+    }
+
+    @ViewBuilder
+    private var drillContent: some View {
+        if music.isLoadingDrill {
+            HStack {
+                Spacer()
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .scaleEffect(0.7)
+                    .padding(.vertical, 40)
+                Spacer()
             }
+        } else {
+            TrackNSTableView(
+                tracks: music.sortedDrillTracks,
+                currentTrackTitle:  music.currentTrack.name,
+                currentTrackArtist: music.currentTrack.artist,
+                isPlaying:       music.isPlaying,
+                showTrackNumber: music.sortByTrackOrder,
+                themeColor:      theme.theme.color,
+                onTap: { music.playFromDrill(index: $0) }
+            )
         }
-        .scrollIndicators(.hidden)
-        .frame(height: 558)
     }
 
     // MARK: - Helpers
@@ -468,10 +441,8 @@ struct PlaylistItemRowView: View {
             HStack(spacing: 0) {
                 Button(action: onPlay) {
                     HStack(spacing: 8) {
-                        if let img = TrackArtworkCache.shared.image(forKey: pl.representativeTrackKey ?? "") {
-                            Image(nsImage: img)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
+                        if let cg = TrackArtworkCache.shared.cgImage(forKey: pl.representativeTrackKey ?? "") {
+                            Image(decorative: cg, scale: 2.0)
                                 .frame(width: 28, height: 28)
                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                         } else {
@@ -538,72 +509,73 @@ struct TrackRowView: View {
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 8) {
+        VStack(spacing: 0) {
+            Button(action: onTap) {
+                HStack(spacing: 8) {
 
-                // 封面（28pt，@2x = 56px，与 thumbSize 一致）
-                if let img = TrackArtworkCache.shared.image(for: track) {
-                    Image(nsImage: img)
-                        .resizable()
-                        .interpolation(.medium)
-                        .frame(width: 28, height: 28)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .opacity(isCurrent ? 0.88 : 1.0)
-                } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(isCurrent ? Color.white.opacity(0.15) : Color.secondary.opacity(0.12))
+                    // 封面（56px@scale:2 = 28pt，零缩放，CGImage 直通 GPU 无 NSImage 转换开销）
+                    if let cg = TrackArtworkCache.shared.cgImage(for: track) {
+                        Image(decorative: cg, scale: 2.0)
                             .frame(width: 28, height: 28)
-                        Image(systemName: "music.note")
-                            .font(.system(size: 11))
-                            .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary)
-                    }
-                }
-
-                // 标题 + 艺术家
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
-                        Text(track.title)
-                            .font(.system(size: 12))
-                            .foregroundColor(isCurrent ? .white : .primary)
-                            .lineLimit(1)
-                        if isCurrent && isPlaying {
-                            Image(systemName: "speaker.wave.2.fill")
-                                .font(.system(size: 9))
-                                .foregroundColor(.white.opacity(0.9))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .opacity(isCurrent ? 0.88 : 1.0)
+                    } else {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(isCurrent ? Color.white.opacity(0.15) : Color.secondary.opacity(0.12))
+                                .frame(width: 28, height: 28)
+                            Image(systemName: "music.note")
+                                .font(.system(size: 11))
+                                .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary)
                         }
                     }
-                    Text(track.artist)
-                        .font(.system(size: 10))
-                        .foregroundColor(isCurrent ? .white.opacity(0.75) : .secondary)
-                        .lineLimit(1)
-                }
 
-                Spacer()
+                    // 标题 + 艺术家
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(track.title)
+                                .font(.system(size: 12))
+                                .foregroundColor(isCurrent ? .white : .primary)
+                                .lineLimit(1)
+                            if isCurrent && isPlaying {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                        }
+                        Text(track.artist)
+                            .font(.system(size: 10))
+                            .foregroundColor(isCurrent ? .white.opacity(0.75) : .secondary)
+                            .lineLimit(1)
+                    }
 
-                // 编号右对齐
-                if showTrackNumber && track.trackNumber > 0 {
-                    Text(track.discNumber > 1
-                         ? "\(track.discNumber)-\(track.trackNumber)"
-                         : "\(track.trackNumber)")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary)
-                        .frame(width: 28, alignment: .trailing)
-                } else {
-                    Text("\(index + 1)")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary.opacity(0.5))
-                        .frame(width: 28, alignment: .trailing)
+                    Spacer()
+
+                    // 编号右对齐
+                    if showTrackNumber && track.trackNumber > 0 {
+                        Text(track.discNumber > 1
+                             ? "\(track.discNumber)-\(track.trackNumber)"
+                             : "\(track.trackNumber)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary)
+                            .frame(width: 28, alignment: .trailing)
+                    } else {
+                        Text("\(index + 1)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary.opacity(0.5))
+                            .frame(width: 28, alignment: .trailing)
+                    }
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 5)
+                .background(isCurrent ? themeColor.opacity(0.85) : Color.clear)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 5)
-            .background(isCurrent ? themeColor.opacity(0.85) : Color.clear)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+            .buttonStyle(.plain)
+            .frame(height: 38)
 
-        Divider().padding(.leading, 56)
+            Divider().padding(.leading, 56)
+        }
     }
 }
 
