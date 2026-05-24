@@ -593,7 +593,7 @@ struct WaveformBarsView: View {
     private let minH: CGFloat = 3
 
     private var barColor: Color {
-        colorScheme == .dark ? Color.green : Color.primary.opacity(0.45)
+        colorScheme == .dark ? Color.white.opacity(0.55) : Color.primary.opacity(0.45)
     }
 
     var body: some View {

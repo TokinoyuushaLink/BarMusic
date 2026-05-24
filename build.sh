@@ -121,7 +121,7 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     <key>CFBundleName</key>                  <string>BarMusic</string>
     <key>CFBundleDisplayName</key>           <string>BarMusic</string>
     <key>CFBundlePackageType</key>           <string>APPL</string>
-    <key>CFBundleShortVersionString</key>    <string>1.0.3</string>
+    <key>CFBundleShortVersionString</key>    <string>2.1.0</string>
     <key>CFBundleVersion</key>               <string>3</string>
     <key>LSMinimumSystemVersion</key>        <string>13.0</string>
     <key>LSUIElement</key>                   <true/>
