@@ -62,6 +62,9 @@ final class AudioPlayer: NSObject {
     private var smoothedBands = [Float](repeating: 0, count: 6)
     private var peakBands     = [Float](repeating: 1, count: 6)
     private var waveformTapActive = false
+    // Ring buffer: accumulate 256-frame chunks so FFT always sees 1024 samples
+    private var ringBuffer  = [Float](repeating: 0, count: 1024)
+    private var ringWritePos = 0
 
     // Latest FFT result — written on audio thread, read on main thread via lock
     private let bandsLock = NSLock()
@@ -119,11 +122,34 @@ final class AudioPlayer: NSObject {
     func startWaveformTap() {
         guard !waveformTapActive else { return }
         waveformTapActive = true
-        engine.mainMixerNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(fftN / 2), format: nil) { [weak self] buf, _ in
+        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 256, format: nil) { [weak self] buf, _ in
             guard let self else { return }
-            let raw = self.analyzeBands(buffer: buf)
-            let α: Float = 0.3
-            self.smoothedBands = zip(self.smoothedBands, raw).map { s, r in s * α + r * (1 - α) }
+            // Fill ring buffer with new frames (wrapping)
+            let frameCount = Int(buf.frameLength)
+            guard let src = buf.floatChannelData?[0], frameCount > 0 else { return }
+            for i in 0..<frameCount {
+                self.ringBuffer[self.ringWritePos] = src[i]
+                self.ringWritePos = (self.ringWritePos + 1) & (self.fftN - 1)
+            }
+            // Build contiguous 1024-sample window from ring buffer
+            var window = [Float](repeating: 0, count: self.fftN)
+            let tail = self.fftN - self.ringWritePos
+            window.withUnsafeMutableBufferPointer { dst in
+                self.ringBuffer.withUnsafeBufferPointer { src in
+                    memcpy(dst.baseAddress!, src.baseAddress! + self.ringWritePos, tail * MemoryLayout<Float>.size)
+                    memcpy(dst.baseAddress! + tail, src.baseAddress!, self.ringWritePos * MemoryLayout<Float>.size)
+                }
+            }
+            let raw = self.analyzeBands(samples: window)
+            // Asymmetric EMA: attack instant, decay smooth
+            let decayα: Float = 0.5
+            for i in 0..<self.smoothedBands.count {
+                if raw[i] >= self.smoothedBands[i] {
+                    self.smoothedBands[i] = raw[i]
+                } else {
+                    self.smoothedBands[i] = self.smoothedBands[i] * (1 - decayα) + raw[i] * decayα
+                }
+            }
             let bands = self.smoothedBands
             // Write only — no main-thread dispatch; WaveformStore polls at display rate
             self.bandsLock.lock()
@@ -138,24 +164,22 @@ final class AudioPlayer: NSObject {
         engine.mainMixerNode.removeTap(onBus: 0)
         smoothedBands = [Float](repeating: 0, count: 6)
         peakBands     = [Float](repeating: 1, count: 6)
+        ringBuffer    = [Float](repeating: 0, count: fftN)
+        ringWritePos  = 0
         bandsLock.lock()
         _latestBands = [Float](repeating: 0, count: 6)
         bandsLock.unlock()
     }
 
-    // Runs on audio render thread — Accelerate FFT → 5 log-frequency bands
-    private func analyzeBands(buffer: AVAudioPCMBuffer) -> [Float] {
-        guard let setup = fftSetup,
-              let src   = buffer.floatChannelData?[0],
-              buffer.frameLength > 0 else { return [Float](repeating: 0, count: 5) }
+    // Runs on audio render thread — Accelerate FFT → 6 log-frequency bands
+    // samples: contiguous 1024-point window (already linearised from ring buffer)
+    private func analyzeBands(samples inputSamples: [Float]) -> [Float] {
+        guard let setup = fftSetup else { return [Float](repeating: 0, count: 6) }
 
         let n = fftN, halfN = fftHalfN
 
-        // Copy into working buffer and apply Hann window
-        var samples = [Float](repeating: 0, count: n)
-        _ = samples.withUnsafeMutableBufferPointer {
-            memcpy($0.baseAddress!, src, min(Int(buffer.frameLength), n) * MemoryLayout<Float>.size)
-        }
+        // Apply Hann window
+        var samples = inputSamples
         var window = [Float](repeating: 0, count: n)
         vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
         vDSP_vmul(samples, 1, window, 1, &samples, 1, vDSP_Length(n))

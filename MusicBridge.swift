@@ -85,7 +85,7 @@ final class WaveformStore: ObservableObject {
 
     func startPolling() {
         guard pollTimer == nil else { return }
-        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.bands = AudioPlayer.shared.latestBands
         }

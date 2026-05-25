@@ -613,6 +613,7 @@ struct WaveformBarsView: View {
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(barColor)
                     .frame(width: barW, height: h)
+                    .animation(nil, value: store.bands)
             }
         }
         .frame(width: 6 * barW + 5 * gap, height: maxH, alignment: .center)
