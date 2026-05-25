@@ -3,24 +3,45 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var music: MusicBridge
     @EnvironmentObject var theme: ThemeManager
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let playlistName = music.drillPlaylistName {
-                // MARK: Drill-down view
-                drillHeader(playlistName: playlistName)
-                Divider()
-                drillSection
-            } else {
-                // MARK: Main view
-                nowPlayingSection
-                Divider()
-                controlsSection
-                volumeSection
-                Divider()
-                playlistHeader
-                Divider()
-                playlistSection
+        ZStack(alignment: .top) {
+            // Album color wash — only rendered in album theme mode
+            if theme.theme == .album {
+                LinearGradient(
+                    gradient: Gradient(stops: [
+                        .init(color: theme.effectiveColor(for: colorScheme).opacity(0.22), location: 0.0),
+                        .init(color: theme.effectiveColor(for: colorScheme).opacity(0.07), location: 0.38),
+                        .init(color: .clear,                                               location: 0.62)
+                    ]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(music.isPlaying && theme.albumHasColor ? 1.0 : 0.0)
+                .animation(.easeInOut(duration: 0.6), value: music.isPlaying)
+                .animation(.easeInOut(duration: 0.6), value: theme.albumHasColor)
+                .allowsHitTesting(false)
+            }
+
+            VStack(spacing: 0) {
+                if let playlistName = music.drillPlaylistName {
+                    // MARK: Drill-down view
+                    drillHeader(playlistName: playlistName)
+                    Divider()
+                    drillSection
+                } else {
+                    // MARK: Main view
+                    nowPlayingSection
+                    Divider()
+                    controlsSection
+                    volumeSection
+                    Divider()
+                    playlistHeader
+                    Divider()
+                    playlistSection
+                }
             }
         }
         .frame(width: 270)
@@ -61,7 +82,7 @@ struct ContentView: View {
                 if !music.currentPlaylistName.isEmpty {
                     Text(music.currentPlaylistName)
                         .font(.system(size: 10))
-                        .foregroundColor(theme.theme.color.opacity(0.8))
+                        .foregroundColor(.secondary)
                         .lineLimit(1)
                 } else {
                     Text(music.currentTrack.album)
@@ -93,7 +114,7 @@ struct ContentView: View {
                 controlButton(icon: "backward.fill", size: 17) { music.previousTrack() }
                 controlButton(
                     icon: music.isPlaying ? "pause.circle.fill" : "play.circle.fill",
-                    size: 38, color: theme.theme.color
+                    size: 38, color: theme.effectiveColor(for: colorScheme)
                 ) { music.togglePlayPause() }
                 controlButton(icon: "forward.fill", size: 17) { music.nextTrack() }
             }
@@ -103,13 +124,13 @@ struct ContentView: View {
             Button { music.cyclePlayMode() } label: {
                 Image(systemName: music.playMode.icon)
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundColor(music.playMode == .sequential ? .secondary : theme.theme.color)
+                    .foregroundColor(music.playMode == .sequential ? .secondary : theme.effectiveColor(for: colorScheme))
                     .frame(width: 34, height: 34)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(music.playMode == .sequential
                                   ? Color.clear
-                                  : theme.theme.color.opacity(0.12))
+                                  : theme.effectiveColor(for: colorScheme).opacity(0.12))
                     )
                     .contentShape(Rectangle())
             }
@@ -122,13 +143,13 @@ struct ContentView: View {
             Button { music.toggleSortOrder() } label: {
                 Image(systemName: music.sortByTrackOrder ? "list.number" : "list.dash")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundColor(music.sortByTrackOrder ? .secondary : theme.theme.color)
+                    .foregroundColor(music.sortByTrackOrder ? .secondary : theme.effectiveColor(for: colorScheme))
                     .frame(width: 34, height: 34)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(music.sortByTrackOrder
                                   ? Color.clear
-                                  : theme.theme.color.opacity(0.12))
+                                  : theme.effectiveColor(for: colorScheme).opacity(0.12))
                     )
                     .contentShape(Rectangle())
             }
@@ -191,7 +212,7 @@ struct ContentView: View {
                     }
                     ProgressView(value: music.buildProgress, total: 1.0)
                         .progressViewStyle(.linear)
-                        .tint(theme.theme.color)
+                        .tint(theme.effectiveColor(for: colorScheme))
                         .scaleEffect(x: 1, y: 0.8, anchor: .center)
                 }
                 .padding(.horizontal, 14)
@@ -207,7 +228,7 @@ struct ContentView: View {
             items: music.flatPlaylistItems,
             currentPlaylistName: music.currentPlaylistName,
             isPlaying: music.isPlaying,
-            themeColor: theme.theme.color,
+            themeColor: theme.effectiveColor(for: colorScheme),
             scrollToName: music.playlistScrollID,
             onPlay: { music.playPlaylist(named: $0) },
             onDrill: {
@@ -235,7 +256,7 @@ struct ContentView: View {
         } label: {
             Image(systemName: "chevron.left")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(theme.theme.color)
+                .foregroundColor(.primary)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
@@ -316,7 +337,7 @@ struct ContentView: View {
                 currentTrackArtist: music.currentTrack.artist,
                 isPlaying:       music.isPlaying,
                 showTrackNumber: music.sortByTrackOrder,
-                themeColor:      theme.theme.color,
+                themeColor:      theme.effectiveColor(for: colorScheme),
                 onTap: { music.playFromDrill(index: $0) }
             )
         }
@@ -366,7 +387,7 @@ struct VolumeView: View {
                     get: { Double(music.volume) },
                     set: { music.setVolume(Float($0)) }
                 ),
-                fillColor: NSColor(theme.theme.color),
+                fillColor: NSColor(theme.effectiveColor(for: colorScheme)),
                 isDark: colorScheme == .dark
             )
             Image(systemName: "speaker.wave.3.fill")

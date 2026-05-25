@@ -11,6 +11,7 @@ enum AppTheme: String, CaseIterable {
     case blue   = "blue"
     case teal   = "teal"
     case green  = "green"
+    case album  = "album"
 
     var color: Color {
         switch self {
@@ -21,6 +22,7 @@ enum AppTheme: String, CaseIterable {
         case .blue:   return .blue
         case .teal:   return .teal
         case .green:  return Color(red: 0.2, green: 0.75, blue: 0.4)
+        case .album:  return .pink  // static fallback; views use effectiveColor
         }
     }
 
@@ -33,6 +35,7 @@ enum AppTheme: String, CaseIterable {
         case .blue:   return L.themeBlue
         case .teal:   return L.themeTeal
         case .green:  return L.themeGreen
+        case .album:  return L.themeAlbum
         }
     }
 }
@@ -46,9 +49,51 @@ final class ThemeManager: ObservableObject {
         return AppTheme(rawValue: raw) ?? .pink
     }()
 
+    // Updated by MusicBridge whenever the current track changes.
+    // Luminance-clamped [0.20, 0.70] — for text, icons, and row highlights.
+    @Published var albumHighlightDark:  Color = Color(white: 0.55)
+    @Published var albumHighlightLight: Color = Color(white: 0.40)
+    // Background fill derived from the dominant (largest) cluster.
+    @Published var albumBgDark:  Color = Color(red: 0.15, green: 0.15, blue: 0.17)
+    @Published var albumBgLight: Color = Color(red: 0.94, green: 0.92, blue: 0.93)
+    // False when current track has no cached artwork — hides the gradient.
+    @Published var albumHasColor: Bool = false
+
+    // Clamped accent — for text, icons, row highlight backgrounds.
+    func effectiveColor(for colorScheme: ColorScheme) -> Color {
+        guard theme == .album else { return theme.color }
+        return colorScheme == .dark ? albumHighlightDark : albumHighlightLight
+    }
+
+    // Background color for the gradient wash (largest cluster, luminance-adjusted).
+    func backgroundColor(for colorScheme: ColorScheme) -> Color {
+        guard theme == .album else { return .clear }
+        return colorScheme == .dark ? albumBgDark : albumBgLight
+    }
+
     func set(_ t: AppTheme) {
         theme = t
         UserDefaults.standard.set(t.rawValue, forKey: "appTheme")
+    }
+
+    func updateAlbumColor(entry: AlbumColorEntry) {
+        let cd = entry.dark.clamped()
+        let cl = entry.light.clamped()
+        withAnimation(.easeInOut(duration: 0.6)) {
+            albumHighlightDark  = Color(red: Double(cd.r), green: Double(cd.g), blue: Double(cd.b))
+            albumHighlightLight = Color(red: Double(cl.r), green: Double(cl.g), blue: Double(cl.b))
+            albumBgDark  = Color(red: Double(entry.bgDark.r),  green: Double(entry.bgDark.g),  blue: Double(entry.bgDark.b))
+            albumBgLight = Color(red: Double(entry.bgLight.r), green: Double(entry.bgLight.g), blue: Double(entry.bgLight.b))
+            albumHasColor = true
+        }
+    }
+
+    func resetAlbumColor() {
+        withAnimation(.easeInOut(duration: 0.6)) {
+            albumHighlightDark  = Color(white: 0.55)
+            albumHighlightLight = Color(white: 0.40)
+            albumHasColor = false
+        }
     }
 }
 
@@ -100,6 +145,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            music.popoverDidOpen()
             popover.contentViewController = NSHostingController(
                 rootView: ContentView()
                     .environmentObject(music)
@@ -183,9 +229,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     // MARK: - NSPopoverDelegate
 
-    func popoverWillShow(_ notification: Notification) {
-        music.popoverDidOpen()
-    }
+    func popoverWillShow(_ notification: Notification) {}
 
     func popoverDidClose(_ notification: Notification) {
         music.popoverDidClose()

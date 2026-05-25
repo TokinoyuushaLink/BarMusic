@@ -52,4 +52,5 @@ enum L {
     static var themeBlue:        String { isChinese ? "蓝色"     : "Blue" }
     static var themeTeal:        String { isChinese ? "青色"     : "Teal" }
     static var themeGreen:       String { isChinese ? "绿色"     : "Green" }
+    static var themeAlbum:       String { isChinese ? "专辑色"   : "Album Color" }
 }

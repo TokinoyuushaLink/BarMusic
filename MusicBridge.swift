@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 import Combine
 import iTunesLibrary
 
@@ -476,10 +477,21 @@ final class MusicBridge: ObservableObject {
         guard let info = audioPlayer.currentTrackInfo else {
             currentTrack = TrackInfo()
             currentArtwork = nil
+            ThemeManager.shared.resetAlbumColor()
             return
         }
         currentTrack = TrackInfo(name: info.title, artist: info.artist, album: info.album)
         guard isPopoverOpen else { return }
+
+        // Update album theme color from precomputed color cache
+        let tKey = TrackArtworkCache.shared.trackKey(
+            title: info.title, artist: info.artist, album: info.album)
+        if let entry = TrackArtworkCache.shared.albumColorEntry(forTrackKey: tKey) {
+            ThemeManager.shared.updateAlbumColor(entry: entry)
+        } else {
+            ThemeManager.shared.resetAlbumColor()
+        }
+
         let url = audioPlayer.currentURL
         Task.detached(priority: .utility) {
             let imgData: Data?

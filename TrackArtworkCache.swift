@@ -31,11 +31,14 @@ final class TrackArtworkCache {
     private var cgPool: [String: CGImage] = [:]
     // key = trackKey，value = hash8（用于从曲目快速查图）
     private var trackIndex: [String: String] = [:]
+    // key = hash8，value = 专辑主题色条目
+    private var colorMap: [String: AlbumColorEntry] = [:]
     private let lock = NSLock()
 
     // ── 磁盘路径 ───────────────────────────────────────────
     private let artworkDir: URL?
     private let indexURL: URL?
+    private let colorIndexURL: URL?
 
     private init() {
         if let appSupport = FileManager.default
@@ -46,9 +49,11 @@ final class TrackArtworkCache {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             artworkDir = dir
             indexURL = dir.appendingPathComponent("artworkIndex.json")
+            colorIndexURL = dir.appendingPathComponent("colorIndex.v3.json")
         } else {
             artworkDir = nil
             indexURL = nil
+            colorIndexURL = nil
         }
     }
 
@@ -94,13 +99,22 @@ final class TrackArtworkCache {
             loaded += 1
         }
 
+        // 加载颜色索引
+        var newColorMap: [String: AlbumColorEntry] = [:]
+        if let colorURL = colorIndexURL,
+           let colorData = try? Data(contentsOf: colorURL),
+           let decoded = try? JSONDecoder().decode([String: AlbumColorEntry].self, from: colorData) {
+            newColorMap = decoded
+        }
+
         lock.lock()
         pool = newPool
         cgPool = newCGPool
         trackIndex = newIndex
+        colorMap = newColorMap
         lock.unlock()
 
-        print("[TrackArtworkCache] ✅ 启动加载：\(loaded) 张唯一封面，\(index.count) 条曲目映射")
+        print("[TrackArtworkCache] ✅ 启动加载：\(loaded) 张唯一封面，\(index.count) 条曲目映射，\(newColorMap.count) 条颜色索引")
     }
 
     // MARK: - 构建：遍历播放列表曲目，哈希去重写 .raw
@@ -117,6 +131,14 @@ final class TrackArtworkCache {
            let data = try? Data(contentsOf: url),
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
             existingIndex = decoded
+        }
+
+        // 读现有颜色索引（增量用）
+        var newColorMap: [String: AlbumColorEntry] = [:]
+        if let url = colorIndexURL,
+           let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode([String: AlbumColorEntry].self, from: data) {
+            newColorMap = decoded
         }
 
         // 收集所有需要处理的唯一曲目（用 trackKey 去重）
@@ -169,14 +191,38 @@ final class TrackArtworkCache {
                     print("[TrackArtworkCache] 写入失败 \(hash8): \(error)")
                     continue
                 }
+                // 分析新写入封面的主题色
+                if newColorMap[hash8] == nil {
+                    newColorMap[hash8] = AlbumColorAnalyzer.analyze(bgraData: rawData)
+                }
+            } else if newColorMap[hash8] == nil {
+                // raw 文件已存在但无颜色记录（旧缓存迁移）
+                if let url = rawURL(hash8: hash8),
+                   let rawData = try? Data(contentsOf: url) {
+                    newColorMap[hash8] = AlbumColorAnalyzer.analyze(bgraData: rawData)
+                }
             }
 
             newIndex[key] = hash8
         }
 
+        // 补全缺失颜色记录（格式迁移：已有 .raw 但颜色索引格式变化导致解码失败）
+        for hash8 in existingHashes where newColorMap[hash8] == nil {
+            if let url = rawURL(hash8: hash8),
+               let rawData = try? Data(contentsOf: url) {
+                newColorMap[hash8] = AlbumColorAnalyzer.analyze(bgraData: rawData)
+            }
+        }
+
         // 写索引
         if let url = indexURL,
            let data = try? JSONEncoder().encode(newIndex) {
+            try? data.write(to: url, options: .atomic)
+        }
+
+        // 写颜色索引
+        if let url = colorIndexURL,
+           let data = try? JSONEncoder().encode(newColorMap) {
             try? data.write(to: url, options: .atomic)
         }
 
@@ -190,10 +236,13 @@ final class TrackArtworkCache {
                 cgPool[hash8] = cgImg
             }
         }
+        for (hash8, entry) in newColorMap where colorMap[hash8] == nil {
+            colorMap[hash8] = entry
+        }
         lock.unlock()
 
         progress?(total, total)
-        print("[TrackArtworkCache] ✅ 构建完成：\(existingHashes.count) 张唯一封面，\(newIndex.count) 条映射")
+        print("[TrackArtworkCache] ✅ 构建完成：\(existingHashes.count) 张唯一封面，\(newIndex.count) 条映射，\(newColorMap.count) 条颜色索引")
     }
 
     // MARK: - 读取（同步，给 SwiftUI 行渲染用）
@@ -238,11 +287,20 @@ final class TrackArtworkCache {
         pool.removeAll()
         cgPool.removeAll()
         trackIndex.removeAll()
+        colorMap.removeAll()
         lock.unlock()
         if let dir = artworkDir {
             try? FileManager.default.removeItem(at: dir)
         }
         print("[TrackArtworkCache] 🗑️ 已清空")
+    }
+
+    // MARK: - 颜色索引读取
+
+    func albumColorEntry(forTrackKey key: String) -> AlbumColorEntry? {
+        lock.lock()
+        defer { lock.unlock() }
+        return trackIndex[key].flatMap { colorMap[$0] }
     }
 
     // MARK: - 私有工具
