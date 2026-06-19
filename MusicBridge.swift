@@ -360,6 +360,10 @@ final class MusicBridge: ObservableObject {
 
     func closePlaylistDetail() {
         drillPlaylistName = nil
+        // drillTracks 由 ContentView 在退出动画结束后延迟清理
+    }
+
+    func clearDrillData() {
         drillTracks = []
     }
 

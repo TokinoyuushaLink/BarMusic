@@ -79,7 +79,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         // Main popover
         popover = NSPopover()
-        popover.contentSize    = NSSize(width: 270, height: 600)
         popover.behavior       = .transient
         popover.animates       = true
         popover.delegate       = self
@@ -100,11 +99,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
-            popover.contentViewController = NSHostingController(
+            let hc = NSHostingController(
                 rootView: ContentView()
                     .environmentObject(music)
                     .environmentObject(theme)
             )
+            hc.sizingOptions = .preferredContentSize
+            popover.contentViewController = hc
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }

@@ -63,6 +63,14 @@ struct PlaylistNSTableView: NSViewRepresentable {
         let tv = c.tableView
         if needsFullReload {
             tv.reloadData()
+            // NSHostingView 内的 SwiftUI 渲染在下一个 layout pass 完成，
+            // 首次 reloadData 后异步补刷可见行，确保封面图正确显示。
+            DispatchQueue.main.async {
+                let range = tv.rows(in: tv.visibleRect)
+                guard range.length > 0 else { return }
+                let visible = IndexSet(integersIn: range.lowerBound..<(range.upperBound + 1))
+                tv.reloadData(forRowIndexes: visible, columnIndexes: IndexSet(integer: 0))
+            }
         } else if needsVisibleReload {
             let range = tv.rows(in: tv.visibleRect)
             let visible = IndexSet(integersIn: range.lowerBound..<(range.upperBound + 1))
@@ -157,6 +165,36 @@ final class PlaylistCoordinator: NSObject, NSTableViewDataSource, NSTableViewDel
     }
 }
 
+// MARK: - SwipeDetectingScrollView
+
+private final class SwipeDetectingScrollView: NSScrollView {
+    var onSwipeRight: (() -> Void)?
+
+    private var accumulatedX: CGFloat = 0
+    private let threshold: CGFloat = 60
+
+    override func scrollWheel(with event: NSEvent) {
+        // 只在手势开始阶段累计，避免惯性滚动误触
+        if event.phase == .began {
+            accumulatedX = 0
+        }
+        if event.phase.contains(.changed) {
+            accumulatedX += event.scrollingDeltaX
+            // 水平累计超过阈值且垂直分量小于水平分量时触发
+            if accumulatedX > threshold,
+               abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
+                accumulatedX = 0
+                onSwipeRight?()
+                return
+            }
+        }
+        // 垂直滚动正常传递
+        if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) {
+            super.scrollWheel(with: event)
+        }
+    }
+}
+
 // MARK: - TrackNSTableView
 
 struct TrackNSTableView: NSViewRepresentable {
@@ -167,7 +205,8 @@ struct TrackNSTableView: NSViewRepresentable {
     let isPlaying:       Bool
     let showTrackNumber: Bool
     let themeColor: Color
-    var onTap: (Int) -> Void
+    var onTap:      (Int) -> Void
+    var onSwipeBack: (() -> Void)?
 
     func makeCoordinator() -> TrackCoordinator { TrackCoordinator() }
 
@@ -185,11 +224,12 @@ struct TrackNSTableView: NSViewRepresentable {
         tv.dataSource = context.coordinator
         tv.delegate   = context.coordinator
 
-        let sv = NSScrollView()
+        let sv = SwipeDetectingScrollView()
         sv.documentView = tv
         sv.drawsBackground = false
         sv.hasVerticalScroller   = false
         sv.hasHorizontalScroller = false
+        sv.onSwipeRight = context.coordinator.onSwipeBack
         return sv
     }
 
@@ -212,6 +252,8 @@ struct TrackNSTableView: NSViewRepresentable {
         c.showTrackNumber     = showTrackNumber
         c.themeColor          = themeColor
         c.onTap               = onTap
+        c.onSwipeBack         = onSwipeBack
+        (sv as? SwipeDetectingScrollView)?.onSwipeRight = onSwipeBack
 
         let tv = c.tableView
         if needsFullReload {
@@ -237,7 +279,8 @@ final class TrackCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelega
     var isPlaying:       Bool = false
     var showTrackNumber: Bool = true
     var themeColor: Color = .pink
-    var onTap: (Int) -> Void = { _ in }
+    var onTap:       (Int) -> Void = { _ in }
+    var onSwipeBack: (() -> Void)?
 
     func numberOfRows(in tableView: NSTableView) -> Int { tracks.count }
 

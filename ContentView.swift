@@ -4,29 +4,74 @@ struct ContentView: View {
     @EnvironmentObject var music: MusicBridge
     @EnvironmentObject var theme: ThemeManager
 
+    // 0 = 主列表可见，1 = 歌曲列表可见
+    @State private var slideOffset: CGFloat = 0
+    // 保存最后一次展示的 drill 名称，退出动画期间继续渲染 drillView
+    @State private var visibleDrillName: String? = nil
+
     var body: some View {
-        VStack(spacing: 0) {
-            if let playlistName = music.drillPlaylistName {
-                // MARK: Drill-down view
-                drillHeader(playlistName: playlistName)
-                Divider()
-                drillSection
-            } else {
-                // MARK: Main view
-                nowPlayingSection
-                Divider()
-                controlsSection
-                volumeSection
-                Divider()
-                playlistHeader
-                Divider()
-                playlistSection
+        let w: CGFloat = 270
+        ZStack(alignment: .top) {
+            // 主列表（进入 drill 时向左平移出去）
+            mainView
+                .frame(width: w)
+                .offset(x: -slideOffset * w)
+
+            // 歌曲列表（从右侧滑入；用 visibleDrillName 撑住退出动画）
+            if let name = visibleDrillName {
+                drillView(playlistName: name)
+                    .frame(width: w)
+                    .offset(x: (1 - slideOffset) * w)
             }
         }
-        .frame(width: 270)
+        .frame(width: w)
+        .clipped()
         .onAppear {
             music.refreshStatus()
             music.fetchPlaylists()
+        }
+        .onChange(of: music.drillPlaylistName) { name in
+            if let name {
+                // 进入：先设置内容再动画
+                visibleDrillName = name
+                withAnimation(.easeInOut(duration: 0.28)) {
+                    slideOffset = 1
+                }
+            } else {
+                // 退出：先动画，动画结束后清除内容和数据
+                withAnimation(.easeInOut(duration: 0.28)) {
+                    slideOffset = 0
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                    visibleDrillName = nil
+                    music.clearDrillData()
+                }
+            }
+        }
+    }
+
+    // MARK: - Main view
+
+    var mainView: some View {
+        VStack(spacing: 0) {
+            nowPlayingSection
+            Divider()
+            controlsSection
+            volumeSection
+            Divider()
+            playlistHeader
+            Divider()
+            playlistSection
+        }
+    }
+
+    // MARK: - Drill view
+
+    func drillView(playlistName: String) -> some View {
+        VStack(spacing: 0) {
+            drillHeader(playlistName: playlistName)
+            Divider()
+            drillSection
         }
     }
 
@@ -317,7 +362,8 @@ struct ContentView: View {
                 isPlaying:       music.isPlaying,
                 showTrackNumber: music.sortByTrackOrder,
                 themeColor:      theme.theme.color,
-                onTap: { music.playFromDrill(index: $0) }
+                onTap:       { music.playFromDrill(index: $0) },
+                onSwipeBack: { music.closePlaylistDetail() }
             )
         }
     }
