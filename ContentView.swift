@@ -12,6 +12,7 @@ struct ContentView: View {
     var body: some View {
         let w: CGFloat = 270
         ZStack(alignment: .top) {
+            Color.clear.background(.thinMaterial).ignoresSafeArea()
             // 主列表（进入 drill 时向左平移出去）
             mainView
                 .frame(width: w)
@@ -22,6 +23,7 @@ struct ContentView: View {
                 drillView(playlistName: name)
                     .frame(width: w)
                     .offset(x: (1 - slideOffset) * w)
+                    .transition(.identity)
             }
         }
         .frame(width: w)

@@ -174,23 +174,15 @@ final class LibraryReader {
     // MARK: - 封面工具（供 TrackArtworkCache 构建阶段使用）
 
     static func artworkDataFromFile(url: URL) -> Data? {
-        let asset = AVURLAsset(url: url)
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: Data?
-        Task {
-            if let metadata = try? await asset.load(.commonMetadata) {
-                for item in metadata {
-                    if item.commonKey == .commonKeyArtwork,
-                       let data = try? await item.load(.dataValue) {
-                        result = data
-                        break
-                    }
-                }
-            }
-            semaphore.signal()
+        // AVAsset.metadata(forFormat:) is synchronous and safe to call on any non-main thread.
+        // The old Task+semaphore pattern deadlocks when the Swift concurrency thread pool is
+        // exhausted (all threads blocked on semaphore.wait(), no thread free to run the Task).
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        for item in asset.commonMetadata where item.commonKey == .commonKeyArtwork {
+            if let data = item.value as? Data { return data }
+            if let nsdata = item.value as? NSData { return nsdata as Data }
         }
-        semaphore.wait()
-        return result
+        return nil
     }
 
     static func artworkFromFile(url: URL) -> NSImage? {

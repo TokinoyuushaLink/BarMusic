@@ -89,7 +89,7 @@ cat > "$CONTENTS/Info.plist" << PLIST
   <key>CFBundleDisplayName</key>         <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>          <string>com.linkapps.BarMusic</string>
   <key>CFBundleVersion</key>             <string>3</string>
-  <key>CFBundleShortVersionString</key>  <string>2.1.1</string>
+  <key>CFBundleShortVersionString</key>  <string>2.1.4</string>
   <key>CFBundleExecutable</key>          <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>         <string>APPL</string>
   <key>NSPrincipalClass</key>            <string>NSApplication</string>

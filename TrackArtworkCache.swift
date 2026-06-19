@@ -266,23 +266,15 @@ final class TrackArtworkCache {
 
     /// 从音频文件提取封面原始 Data（同步，在后台线程调用）
     private func artworkData(from url: URL) -> Data? {
-        let asset = AVURLAsset(url: url)
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: Data?
-        Task {
-            if let metadata = try? await asset.load(.commonMetadata) {
-                for item in metadata {
-                    if item.commonKey == .commonKeyArtwork,
-                       let data = try? await item.load(.dataValue) {
-                        result = data
-                        break
-                    }
-                }
-            }
-            semaphore.signal()
+        // AVAsset.metadata(forFormat:) is synchronous — no Task/semaphore needed.
+        // Task{} + semaphore.wait() deadlocks when the Swift concurrency thread pool
+        // is saturated (all threads blocked waiting; no thread free to run the Task).
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: false])
+        for item in asset.commonMetadata where item.commonKey == .commonKeyArtwork {
+            if let data = item.value as? Data { return data }
+            if let nsdata = item.value as? NSData { return nsdata as Data }
         }
-        semaphore.wait()
-        return result
+        return nil
     }
 
     /// 把封面 Data 缩放到 thumbSize×thumbSize，返回 BGRA raw Data（固定 rawByteCount 字节）

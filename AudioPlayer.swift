@@ -228,7 +228,8 @@ final class AudioPlayer: NSObject {
     }
 
     @objc private func handleEngineConfigChange(_ notification: Notification) {
-        engine.attach(playerNode)
+        // Do NOT re-attach — playerNode is already attached; double-attach crashes the engine.
+        // Just reconnect, restart, and resume.
         engine.connect(playerNode, to: engine.mainMixerNode, format: nil)
         engine.mainMixerNode.outputVolume = volume
         do {

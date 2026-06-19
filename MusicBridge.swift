@@ -275,7 +275,7 @@ final class MusicBridge: ObservableObject {
                         print("[MusicBridge] 📸 封面缓存构建中...")
                         TrackArtworkCache.shared.buildCache(for: allPlaylists) { done, total in
                             let p = prog.setArt(done: done, total: total)
-                            DispatchQueue.main.async { [weak self] in self?.buildProgress = p }
+                            Task { @MainActor in self.buildProgress = p }
                         }
                         print("[MusicBridge] ✅ 封面缓存构建完成")
                     }
@@ -285,7 +285,7 @@ final class MusicBridge: ObservableObject {
                         print("[MusicBridge] 📋 曲目缓存构建中...")
                         PlaylistDiskCache.shared.prebuildAllTracksCaches(from: allPlaylists) { done, total in
                             let p = prog.setTrk(done: done, total: total)
-                            DispatchQueue.main.async { [weak self] in self?.buildProgress = p }
+                            Task { @MainActor in self.buildProgress = p }
                         }
                         print("[MusicBridge] ✅ 曲目缓存构建完成")
                     }
