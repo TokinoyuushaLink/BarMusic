@@ -22,6 +22,15 @@ macOS menubar Apple Music standlone control app\
 - 顶部显示当前正在播放的歌曲
 - 左键单击显示主界面，右键单击显示设置
 
+## 编译：
+安装Command-line-Tool
+到https://github.com/TokinoyuushaLink/G2-Icon-Clipper 下载图标裁剪工具，依据指示提取iconset到BarMusic目录下
+然后:
+```
+chmod +x build.sh
+./build.sh
+```
+
 ---
 
 A menu bar controller app for Apple Music.
@@ -44,3 +53,12 @@ A menu bar controller app for Apple Music.
   - Volume slider
 - Displays the currently playing song at the top
 - Left Click shows the main view , Right Click Shows the Settings
+
+## Build
+Install Command-Line-Tool
+goto https://github.com/TokinoyuushaLink/G2-Icon-Clipper and clip icon using icon.png in the folder , get iconset according to instruction and place it in the BarMusic folder 
+and:
+```
+chmod +x build.sh
+./build.sh
+```
