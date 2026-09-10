@@ -664,6 +664,26 @@ private final class AnimatedContentPanelsView: NSView {
         drillHost.isHidden = wasHidden
     }
 
+    /// A hosted NSTableView can receive model updates while its panel is
+    /// hidden. Its coordinator then contains the new state, but no cells were
+    /// visible to reconfigure. Refresh only the rows that are about to become
+    /// visible so selection/highlight state is current without rebuilding the
+    /// table or disturbing its scroll position.
+    private func refreshVisibleTableRows(in view: NSView) {
+        if let tableView = view as? NSTableView {
+            let range = tableView.rows(in: tableView.visibleRect)
+            guard range.location != NSNotFound, range.length > 0 else { return }
+            tableView.reloadData(
+                forRowIndexes: IndexSet(integersIn: range.location..<(range.location + range.length)),
+                columnIndexes: IndexSet(integer: 0)
+            )
+            return
+        }
+        for subview in view.subviews {
+            refreshVisibleTableRows(in: subview)
+        }
+    }
+
     func configure(
         showsDrill: Bool,
         horizontalBeginTime: CFTimeInterval,
@@ -705,6 +725,7 @@ private final class AnimatedContentPanelsView: NSView {
         // moving. In particular, this creates the first visible NSTableView rows
         // while the host is still outside the clipped viewport.
         incoming.layoutSubtreeIfNeeded()
+        refreshVisibleTableRows(in: incoming)
         incoming.displayIfNeeded()
 
         let outgoingTarget = showsDrill ? -distance : distance
