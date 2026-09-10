@@ -44,6 +44,14 @@ final class AudioPlayer: NSObject {
     private var seekFrameOffset: AVAudioFramePosition = 0
     // Incremented on every play/seek/stop to invalidate stale completion callbacks
     private var playGeneration = 0
+    // Automatic track changes happen only after the audio reaches the output device,
+    // followed by the user-selected silence.
+    private(set) var interTrackDelay: TimeInterval = {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "interTrackDelay") != nil else { return 1.0 }
+        return min(4.0, max(0.0, defaults.double(forKey: "interTrackDelay")))
+    }()
+    private var autoAdvancePending = false
 
     private(set) var isPlaying:   Bool     = false
     private(set) var currentIndex: Int     = 0
@@ -256,6 +264,7 @@ final class AudioPlayer: NSObject {
 
     func play(at index: Int) {
         guard index >= 0, index < queue.count else { return }
+        autoAdvancePending = false
         playerNode.stop()
         currentIndex    = index
         seekFrameOffset = 0
@@ -282,30 +291,60 @@ final class AudioPlayer: NSObject {
         guard count > 0 else { return }
         file.framePosition = frame
         playerNode.scheduleSegment(
-            file, startingFrame: frame, frameCount: count, at: nil
-        ) { [weak self] in
+            file,
+            startingFrame: frame,
+            frameCount: count,
+            at: nil,
+            completionCallbackType: .dataPlayedBack
+        ) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, self.playGeneration == gen else { return }
-                self.handleTrackEnd()
+                self.handleTrackEnd(generation: gen)
             }
         }
     }
 
-    private func handleTrackEnd() {
+    private func handleTrackEnd(generation gen: Int) {
         guard isPlaying else { return }
-        next()
+
+        let delay = interTrackDelay
+        guard delay > 0 else {
+            next()
+            return
+        }
+
+        autoAdvancePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self,
+                  self.playGeneration == gen,
+                  self.autoAdvancePending,
+                  self.isPlaying
+            else { return }
+            self.autoAdvancePending = false
+            self.next()
+        }
     }
 
     func togglePlayPause() {
         if currentFile == nil, !queue.isEmpty { play(at: 0); return }
         if isPlaying {
             playerNode.pause()
+            isPlaying = false
+            onStateChanged?()
         } else {
+            // If playback was paused during the silent inter-track gap, there is
+            // no audio segment to resume. Advance to the next track instead.
+            if autoAdvancePending {
+                autoAdvancePending = false
+                isPlaying = true
+                next()
+                return
+            }
             startEngineIfNeeded()
             playerNode.play()
+            isPlaying = true
+            onStateChanged?()
         }
-        isPlaying.toggle()
-        onStateChanged?()
     }
 
     func next() {
@@ -349,6 +388,7 @@ final class AudioPlayer: NSObject {
 
     func stop() {
         playGeneration += 1
+        autoAdvancePending = false
         playerNode.stop()
         currentFile     = nil
         seekFrameOffset = 0
@@ -359,6 +399,7 @@ final class AudioPlayer: NSObject {
 
     func seek(to time: Double) {
         guard let file = currentFile else { return }
+        autoAdvancePending = false
         let sr    = file.processingFormat.sampleRate
         let frame = min(AVAudioFramePosition(max(0, time) * sr), file.length - 1)
         playGeneration += 1
@@ -375,6 +416,12 @@ final class AudioPlayer: NSObject {
     func setVolume(_ v: Float) {
         volume = v
         engine.mainMixerNode.outputVolume = v
+    }
+
+    func setInterTrackDelay(_ delay: TimeInterval) {
+        let clamped = min(4.0, max(0.0, delay))
+        interTrackDelay = clamped
+        UserDefaults.standard.set(clamped, forKey: "interTrackDelay")
     }
 
     // MARK: - Track info

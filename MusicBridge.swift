@@ -112,6 +112,8 @@ final class MusicBridge: ObservableObject {
     @Published var isLoadingPlaylists: Bool = false
     @Published var buildProgress: Double = 0
     @Published var buildStatusText: String = ""
+    /// Changes only when a complete artwork snapshot becomes available.
+    @Published private(set) var artworkCacheRevision: Int = 0
     @Published var currentPlaylistName: String = ""
     @Published var volume: Float = UserDefaults.standard.object(forKey: "volume") as? Float ?? 1.0
     /// 主列表滚动位置锚点（playlist name），session 内持久，popover 关闭时销毁
@@ -119,8 +121,17 @@ final class MusicBridge: ObservableObject {
 
     // Drill-down
     @Published var drillPlaylistName: String? = nil
-    @Published var drillTracks: [PlaylistTrackItem] = []
+    @Published var drillTracks: [PlaylistTrackItem] = [] {
+        didSet {
+            cachedTrackOrder = drillTracks.sorted {
+                if $0.discNumber != $1.discNumber { return $0.discNumber < $1.discNumber }
+                return $0.trackNumber < $1.trackNumber
+            }
+        }
+    }
     @Published var isLoadingDrill: Bool = false
+    private var cachedTrackOrder: [PlaylistTrackItem] = []
+    private var drillLoadGeneration: UInt = 0
 
     let waveformStore = WaveformStore()
 
@@ -198,6 +209,10 @@ final class MusicBridge: ObservableObject {
         UserDefaults.standard.set(v, forKey: "volume")
     }
 
+    func setInterTrackDelay(_ delay: TimeInterval) {
+        audioPlayer.setInterTrackDelay(delay)
+    }
+
     // MARK: - Popover lifecycle
 
     func popoverDidOpen() {
@@ -229,7 +244,9 @@ final class MusicBridge: ObservableObject {
                 PlaylistDiskCache.shared.prewarmTrackCaches()
             }
             Task.detached(priority: .utility) {
-                TrackArtworkCache.shared.loadFromDisk {}
+                TrackArtworkCache.shared.loadFromDisk { [weak self] in
+                    self?.artworkCacheRevision &+= 1
+                }
             }
             Task.detached(priority: .background) {
                 _ = LibraryCache.shared.get()  // 后台静默预热，不阻塞前两个任务
@@ -301,6 +318,7 @@ final class MusicBridge: ObservableObject {
                 self?.isLoadingPlaylists = false
                 self?.buildProgress = 1.0
                 self?.buildStatusText = ""
+                self?.artworkCacheRevision &+= 1
             }
         }
     }
@@ -308,57 +326,62 @@ final class MusicBridge: ObservableObject {
     // MARK: - Drill-down
 
     func openPlaylistDetail(named name: String) {
-        drillPlaylistName = name
+        // Do not begin the panel transition until the destination table has its
+        // data. Otherwise a slow/cold playlist replaces the loading view midway
+        // through the Core Animation movement and appears to skip the animation.
+        drillLoadGeneration &+= 1
+        let generation = drillLoadGeneration
         drillTracks = []
         isLoadingDrill = true
         Task.detached(priority: .userInitiated) {
+            let tracks: [PlaylistTrackItem]?
+
             // 1. 优先从活跃列表读取
             if let active = PlaylistDiskCache.shared.getActivePlaylistTracks(),
                active.name == name {
-                await MainActor.run { [weak self] in
-                    self?.drillTracks = active.tracks
-                    self?.isLoadingDrill = false
+                tracks = active.tracks
+            } else if let cached = PlaylistDiskCache.shared.loadTracks(for: name) {
+                // 2. 从磁盘/内存缓存读取（通常已经预构建）
+                tracks = cached
+            } else {
+                // 3. 缓存未命中（极少发生）→ 从 iTunesLibrary 读取
+                print("[MusicBridge] ⚠️ 曲目缓存未命中：\(name)，从 iTunes 库读取")
+                if let library = LibraryCache.shared.get(),
+                   let playlist = library.allPlaylists.first(where: { $0.name == name }) {
+                    tracks = playlist.items.map { track in
+                        PlaylistTrackItem(
+                            title: track.title,
+                            artist: track.artist?.name ?? L.unknownArtist,
+                            album: track.album.title ?? L.unknownAlbum,
+                            discNumber: track.album.discNumber,
+                            trackNumber: track.trackNumber,
+                            url: track.location
+                        )
+                    }
+                } else {
+                    tracks = nil
                 }
-                return
-            }
-            
-            // 2. 从磁盘/内存缓存读取（应该已经预构建好了）
-            if let cached = PlaylistDiskCache.shared.loadTracks(for: name) {
-                await MainActor.run { [weak self] in
-                    self?.drillTracks = cached
-                    self?.isLoadingDrill = false
-                }
-                return
             }
 
-            // 3. 缓存未命中（极少发生）→ 从 iTunesLibrary 读取
-            print("[MusicBridge] ⚠️ 曲目缓存未命中：\(name)，从 iTunes 库读取")
-            guard let library = LibraryCache.shared.get(),
-                  let playlist = library.allPlaylists.first(where: { $0.name == name })
-            else {
-                await MainActor.run { [weak self] in self?.isLoadingDrill = false }
-                return
-            }
-            let tracks: [PlaylistTrackItem] = playlist.items.map { track in
-                PlaylistTrackItem(
-                    title: track.title,
-                    artist: track.artist?.name ?? L.unknownArtist,
-                    album: track.album.title ?? L.unknownAlbum,
-                    discNumber: track.album.discNumber,
-                    trackNumber: track.trackNumber,
-                    url: track.location
-                )
-            }
-            // 写入活跃列表缓存
-            PlaylistDiskCache.shared.setActivePlaylist(name: name, tracks: tracks)
             await MainActor.run { [weak self] in
-                self?.drillTracks = tracks
-                self?.isLoadingDrill = false
+                guard let self, self.drillLoadGeneration == generation else { return }
+                guard let tracks else {
+                    self.isLoadingDrill = false
+                    return
+                }
+
+                PlaylistDiskCache.shared.setActivePlaylist(name: name, tracks: tracks)
+                // Publish the destination content first. drillPlaylistName is
+                // deliberately last because it is the transition trigger.
+                self.drillTracks = tracks
+                self.isLoadingDrill = false
+                self.drillPlaylistName = name
             }
         }
     }
 
     func closePlaylistDetail() {
+        drillLoadGeneration &+= 1
         drillPlaylistName = nil
         // drillTracks 由 ContentView 在退出动画结束后延迟清理
     }
@@ -387,11 +410,7 @@ final class MusicBridge: ObservableObject {
     }
 
     var sortedDrillTracks: [PlaylistTrackItem] {
-        guard sortByTrackOrder else { return drillTracks }
-        return drillTracks.sorted {
-            if $0.discNumber != $1.discNumber { return $0.discNumber < $1.discNumber }
-            return $0.trackNumber < $1.trackNumber
-        }
+        sortByTrackOrder ? cachedTrackOrder : drillTracks
     }
 
     func playPlaylist(named name: String) {

@@ -36,7 +36,7 @@ enum L {
     static var modeRepeatOne:   String { isChinese ? "单曲" : "Repeat" }
 
     // Build progress
-    static var buildingCache:    String { isChinese ? "正在构建缓存..." : "Building cache..." }
+    static var buildingCache:    String { isChinese ? "构建缓存..." : "Building cache..." }
 
     // Bottom bar
     static var refreshPlaylists: String { isChinese ? "刷新列表" : "Refresh Playlists" }
@@ -44,6 +44,12 @@ enum L {
     // Settings menu
     static var settings:         String { isChinese ? "设置"     : "Settings" }
     static var waveformBars:     String { isChinese ? "波形显示"  : "Waveform Bars" }
+    static var playbackInterval: String { isChinese ? "播放间隔"  : "Playback Interval" }
+    static var switchImmediately:String { isChinese ? "立即切换"  : "Switch Immediately" }
+    static func playbackIntervalValue(_ value: Double) -> String {
+        guard value > 0 else { return switchImmediately }
+        return String(format: isChinese ? "%.1f 秒" : "%.1f s", value)
+    }
     static var themeColor:       String { isChinese ? "主题色"   : "Theme Color" }
     static var themeRed:         String { isChinese ? "红色"     : "Red" }
     static var themeOrange:      String { isChinese ? "橙色"     : "Orange" }
@@ -52,4 +58,5 @@ enum L {
     static var themeBlue:        String { isChinese ? "蓝色"     : "Blue" }
     static var themeTeal:        String { isChinese ? "青色"     : "Teal" }
     static var themeGreen:       String { isChinese ? "绿色"     : "Green" }
+    static var themeCustom:      String { isChinese ? "自定义颜色…" : "Custom Color…" }
 }

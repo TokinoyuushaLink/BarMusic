@@ -1,52 +1,77 @@
 import SwiftUI
+import AppKit
+import QuartzCore
 
 struct ContentView: View {
     @EnvironmentObject var music: MusicBridge
     @EnvironmentObject var theme: ThemeManager
 
-    // 0 = 主列表可见，1 = 歌曲列表可见
-    @State private var slideOffset: CGFloat = 0
+    // Decoupled from MusicBridge so the AppKit header motion and SwiftUI list
+    // motion can be committed in the same animation transaction.
+    @State private var showsDrillTopPanel = false
+    @State private var hasAppeared = false
+    @State private var horizontalMotionBeginTime: CFTimeInterval = 0
+    // SwiftUI interpolates this value with the macOS 14 smooth spring; the
+    // resulting height is applied to the AppKit material panel each frame.
+    @State private var topPanelHeight: CGFloat = 193
     // 保存最后一次展示的 drill 名称，退出动画期间继续渲染 drillView
     @State private var visibleDrillName: String? = nil
+    private let mainHeaderHeight: CGFloat = 193
+    private let drillHeaderHeight: CGFloat = 45
+    private let panelHeight: CGFloat = 603
+    private var displayedDrillName: String? {
+        visibleDrillName ?? music.drillPlaylistName
+    }
 
     var body: some View {
         let w: CGFloat = 270
         ZStack(alignment: .top) {
             Color.clear.background(.thinMaterial).ignoresSafeArea()
-            // 主列表（进入 drill 时向左平移出去）
-            mainView
-                .frame(width: w)
-                .offset(x: -slideOffset * w)
 
-            // 歌曲列表（从右侧滑入；用 visibleDrillName 撑住退出动画）
-            if let name = visibleDrillName {
-                drillView(playlistName: name)
-                    .frame(width: w)
-                    .offset(x: (1 - slideOffset) * w)
-                    .transition(.identity)
-            }
+            animatedContentPanels
+                .frame(width: w, height: panelHeight)
+
+            animatedTopPanel
+                // Animate the representable's real layout frame. AppKit then
+                // follows these interpolated bounds on every SwiftUI frame.
+                .frame(width: w, height: topPanelHeight, alignment: .top)
+                .zIndex(2)
         }
         .frame(width: w)
         .clipped()
         .onAppear {
+            // Restore drill state if this is the first presentation while a
+            // playlist is already retained by MusicBridge.
+            if let name = music.drillPlaylistName {
+                visibleDrillName = name
+                topPanelHeight = drillHeaderHeight
+                showsDrillTopPanel = true
+            }
+            hasAppeared = true
             music.refreshStatus()
             music.fetchPlaylists()
         }
-        .onChange(of: music.drillPlaylistName) { name in
+        .onChange(of: music.drillPlaylistName) { _, name in
             if let name {
-                // 进入：先设置内容再动画
+                // Stage the destination root first. AnimatedContentPanels calls
+                // back after AppKit has laid out and displayed it offscreen.
                 visibleDrillName = name
-                withAnimation(.easeInOut(duration: 0.28)) {
-                    slideOffset = 1
-                }
             } else {
                 // 退出：先动画，动画结束后清除内容和数据
-                withAnimation(.easeInOut(duration: 0.28)) {
-                    slideOffset = 0
+                horizontalMotionBeginTime = CACurrentMediaTime() + 0.05
+                showsDrillTopPanel = false
+                withAnimation(.smooth(duration: 0.44).delay(0.025)) {
+                    topPanelHeight = mainHeaderHeight
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                    // A new playlist may have been opened during the return
+                    // animation. Never let the previous transition clear it.
+                    guard music.drillPlaylistName == nil else { return }
                     visibleDrillName = nil
                     music.clearDrillData()
+                    // Consume the one-shot centering request. This also lets the
+                    // same playlist request centering again on its next opening.
+                    music.playlistScrollID = nil
                 }
             }
         }
@@ -55,6 +80,18 @@ struct ContentView: View {
     // MARK: - Main view
 
     var mainView: some View {
+        ZStack(alignment: .top) {
+            // Preserve the original panel height while allowing the table to fill
+            // the area underneath the floating controls.
+            Color.clear
+                .frame(height: panelHeight)
+
+            playlistSection(topContentInset: mainHeaderHeight)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var mainFixedHeader: some View {
         VStack(spacing: 0) {
             nowPlayingSection
             Divider()
@@ -62,19 +99,100 @@ struct ContentView: View {
             volumeSection
             Divider()
             playlistHeader
-            Divider()
-            playlistSection
         }
     }
 
     // MARK: - Drill view
 
     func drillView(playlistName: String) -> some View {
-        VStack(spacing: 0) {
-            drillHeader(playlistName: playlistName)
-            Divider()
-            drillSection
+        ZStack(alignment: .top) {
+            Color.clear
+                .frame(height: panelHeight)
+
+            drillSection(topContentInset: drillHeaderHeight)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var animatedTopPanel: some View {
+        AnimatedTopPanel(
+            // Before onAppear, use the retained model state so reopening an
+            // already-drilled popup starts at the correct header immediately.
+            showsDrillHeader: hasAppeared
+                ? showsDrillTopPanel
+                : music.drillPlaylistName != nil,
+            horizontalBeginTime: horizontalMotionBeginTime,
+            drillContentID: displayedDrillName ?? "",
+            expandedHeight: mainHeaderHeight,
+            collapsedHeight: drillHeaderHeight,
+            mainContent: AnyView(
+                HostedContentObserver(music: music, theme: theme) {
+                    AnyView(
+                        mainFixedHeader
+                            .environmentObject(music)
+                            .environmentObject(theme)
+                    )
+                }
+            ),
+            drillContent: AnyView(
+                Group {
+                    if let name = displayedDrillName {
+                        HostedContentObserver(music: music, theme: theme) {
+                            AnyView(
+                                VStack(spacing: 0) {
+                                    drillHeader(playlistName: name)
+                                }
+                                .environmentObject(music)
+                                .environmentObject(theme)
+                            )
+                        }
+                    }
+                }
+            )
+        )
+    }
+
+    private var animatedContentPanels: some View {
+        AnimatedContentPanels(
+            showsDrill: hasAppeared
+                ? showsDrillTopPanel
+                : music.drillPlaylistName != nil,
+            horizontalBeginTime: horizontalMotionBeginTime,
+            drillContentID: displayedDrillName ?? "",
+            onDrillPrepared: { name in
+                guard music.drillPlaylistName == name,
+                      visibleDrillName == name,
+                      !showsDrillTopPanel
+                else { return }
+                horizontalMotionBeginTime = CACurrentMediaTime() + 0.05
+                showsDrillTopPanel = true
+                withAnimation(.smooth(duration: 0.44).delay(0.025)) {
+                    topPanelHeight = drillHeaderHeight
+                }
+            },
+            mainContent: AnyView(
+                HostedContentObserver(music: music, theme: theme) {
+                    AnyView(
+                        mainView
+                            .environmentObject(music)
+                            .environmentObject(theme)
+                    )
+                }
+            ),
+            drillContent: AnyView(
+                Group {
+                    if let name = displayedDrillName {
+                        HostedContentObserver(music: music, theme: theme) {
+                            AnyView(
+                                drillView(playlistName: name)
+                                    .environmentObject(music)
+                                    .environmentObject(theme)
+                            )
+                        }
+                    }
+                }
+            )
+        )
     }
 
     // MARK: - Now Playing
@@ -108,7 +226,7 @@ struct ContentView: View {
                 if !music.currentPlaylistName.isEmpty {
                     Text(music.currentPlaylistName)
                         .font(.system(size: 10))
-                        .foregroundColor(theme.theme.color.opacity(0.8))
+                        .foregroundColor(theme.color.opacity(0.8))
                         .lineLimit(1)
                 } else {
                     Text(music.currentTrack.album)
@@ -140,7 +258,7 @@ struct ContentView: View {
                 controlButton(icon: "backward.fill", size: 17) { music.previousTrack() }
                 controlButton(
                     icon: music.isPlaying ? "pause.circle.fill" : "play.circle.fill",
-                    size: 38, color: theme.theme.color
+                    size: 38, color: theme.color
                 ) { music.togglePlayPause() }
                 controlButton(icon: "forward.fill", size: 17) { music.nextTrack() }
             }
@@ -150,13 +268,13 @@ struct ContentView: View {
             Button { music.cyclePlayMode() } label: {
                 Image(systemName: music.playMode.icon)
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundColor(music.playMode == .sequential ? .secondary : theme.theme.color)
+                    .foregroundColor(music.playMode == .sequential ? .secondary : theme.color)
                     .frame(width: 34, height: 34)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(music.playMode == .sequential
                                   ? Color.clear
-                                  : theme.theme.color.opacity(0.12))
+                                  : theme.color.opacity(0.12))
                     )
                     .contentShape(Rectangle())
             }
@@ -169,13 +287,13 @@ struct ContentView: View {
             Button { music.toggleSortOrder() } label: {
                 Image(systemName: music.sortByTrackOrder ? "list.number" : "list.dash")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundColor(music.sortByTrackOrder ? .secondary : theme.theme.color)
+                    .foregroundColor(music.sortByTrackOrder ? .secondary : theme.color)
                     .frame(width: 34, height: 34)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(music.sortByTrackOrder
                                   ? Color.clear
-                                  : theme.theme.color.opacity(0.12))
+                                  : theme.color.opacity(0.12))
                     )
                     .contentShape(Rectangle())
             }
@@ -197,77 +315,90 @@ struct ContentView: View {
     // MARK: - Playlist Header
 
     var playlistHeader: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center) {
-                Image(systemName: "music.note.list")
-                    .font(.system(size: 11))
+        ZStack {
+            playlistHeaderIdleContent
+                .opacity(music.isLoadingPlaylists ? 0 : 1)
+
+            playlistHeaderLoadingContent
+                .opacity(music.isLoadingPlaylists ? 1 : 0)
+        }
+        // Both states occupy the original single-row height. Progress is an
+        // overlay inside this frame and can never expand the fixed top panel.
+        .frame(height: 28)
+        .clipped()
+    }
+
+    private var playlistHeaderIdleContent: some View {
+        HStack(alignment: .center) {
+            Image(systemName: "music.note.list")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            Text(L.playlists)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.primary)
+
+            Spacer()
+
+            let total = music.playlistGroups.reduce(0) { $0 + $1.playlists.count }
+            if total > 0 {
+                Text("\(total)")
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
-                Text(L.playlists)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.primary)
-
-                Spacer()
-
-                if music.isLoadingPlaylists {
-                    Text(music.buildProgress > 0 ? "\(Int(music.buildProgress * 100))%" : "···")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .frame(height: 14)
-                        .animation(nil, value: music.buildProgress)
-                } else {
-                    let total = music.playlistGroups.reduce(0) { $0 + $1.playlists.count }
-                    if total > 0 {
-                        Text("\(total)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .frame(height: 14)
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 7)
-            .padding(.bottom, music.isLoadingPlaylists ? 4 : 7)
-
-            if music.isLoadingPlaylists {
-                VStack(alignment: .leading, spacing: 2) {
-                    if !music.buildStatusText.isEmpty {
-                        Text(music.buildStatusText)
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                    ProgressView(value: music.buildProgress, total: 1.0)
-                        .progressViewStyle(.linear)
-                        .tint(theme.theme.color)
-                        .scaleEffect(x: 1, y: 0.8, anchor: .center)
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 6)
+                    .frame(height: 14)
             }
         }
+        .padding(.horizontal, 14)
+        .frame(height: 28)
+    }
+
+    private var playlistHeaderLoadingContent: some View {
+        HStack(alignment: .center, spacing: 7) {
+            Image(systemName: "music.note.list")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            Text(music.buildStatusText.isEmpty ? L.buildingCache : music.buildStatusText)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            ProgressView(value: music.buildProgress, total: 1.0)
+                .progressViewStyle(.linear)
+                .tint(theme.color)
+                .scaleEffect(x: 1, y: 0.65, anchor: .center)
+                .frame(maxWidth: .infinity)
+                .animation(nil, value: music.buildProgress)
+
+            Text(music.buildProgress > 0 ? "\(Int(music.buildProgress * 100))%" : "···")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 30, height: 14, alignment: .trailing)
+                .animation(nil, value: music.buildProgress)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 28)
     }
 
     // MARK: - Playlist Section
 
-    var playlistSection: some View {
+    func playlistSection(topContentInset: CGFloat) -> some View {
         PlaylistNSTableView(
             items: music.flatPlaylistItems,
             currentPlaylistName: music.currentPlaylistName,
             isPlaying: music.isPlaying,
-            themeColor: theme.theme.color,
+            themeColor: theme.color,
+            artworkCacheRevision: music.artworkCacheRevision,
             scrollToName: music.playlistScrollID,
+            topContentInset: topContentInset,
             onPlay: { music.playPlaylist(named: $0) },
             onDrill: {
                 music.playlistScrollID = $0
                 music.openPlaylistDetail(named: $0)
             },
             onToggleFolder: { folderName in
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    music.toggleFolderCollapse(folderName)
-                }
+                music.toggleFolderCollapse(folderName)
             }
         )
-        .frame(height: 410)
     }
 
     // MARK: - Drill-down Header
@@ -282,7 +413,7 @@ struct ContentView: View {
         } label: {
             Image(systemName: "chevron.left")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(theme.theme.color)
+                .foregroundColor(theme.color)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
@@ -341,12 +472,8 @@ struct ContentView: View {
 
     // MARK: - Drill-down Track List
 
-    var drillSection: some View {
-        drillContent.frame(height: 558)
-    }
-
     @ViewBuilder
-    private var drillContent: some View {
+    private func drillSection(topContentInset: CGFloat) -> some View {
         if music.isLoadingDrill {
             HStack {
                 Spacer()
@@ -356,6 +483,7 @@ struct ContentView: View {
                     .padding(.vertical, 40)
                 Spacer()
             }
+            .padding(.top, topContentInset)
         } else {
             TrackNSTableView(
                 tracks: music.sortedDrillTracks,
@@ -363,7 +491,9 @@ struct ContentView: View {
                 currentTrackArtist: music.currentTrack.artist,
                 isPlaying:       music.isPlaying,
                 showTrackNumber: music.sortByTrackOrder,
-                themeColor:      theme.theme.color,
+                themeColor:      theme.color,
+                artworkCacheRevision: music.artworkCacheRevision,
+                topContentInset: topContentInset,
                 onTap:       { music.playFromDrill(index: $0) },
                 onSwipeBack: { music.closePlaylistDetail() }
             )
@@ -394,6 +524,523 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Persistent hosting roots
+
+/// NSHostingView keeps this root for the lifetime of a panel. The closure is
+/// deliberately rebuilt when either observable object changes, so value-type
+/// SwiftUI content never becomes a stale snapshot while the AppKit host and its
+/// Core Animation layer remain stable.
+private struct HostedContentObserver: View {
+    @ObservedObject var music: MusicBridge
+    @ObservedObject var theme: ThemeManager
+    let build: () -> AnyView
+
+    var body: some View {
+        // Reading one value from each object makes the dependency explicit in
+        // addition to @ObservedObject's normal objectWillChange subscription.
+        let _ = music.isPlaying
+        let _ = theme.theme
+        build()
+    }
+}
+
+// MARK: - AppKit animated top panel
+
+private enum HorizontalPanelMotion {
+    static let topDuration: TimeInterval = 0.26
+    static let contentSpring = Spring(response: 0.26, dampingRatio: 1.1)
+    static let contentDuration: TimeInterval = contentSpring.settlingDuration
+
+    static let topSamples = samples(
+        spring: .smooth(duration: topDuration),
+        duration: topDuration
+    )
+    static let contentSamples = samples(
+        spring: contentSpring,
+        duration: contentDuration
+    )
+
+    private static func samples(spring: Spring, duration: TimeInterval) -> [NSNumber] {
+        let sampleCount = max(2, Int(ceil(duration * 120)))
+        return (0...sampleCount).map { index in
+            if index == sampleCount { return NSNumber(value: 1.0) }
+            let time = duration * Double(index) / Double(sampleCount)
+            let value: Double = spring.value(
+                target: 1.0,
+                initialVelocity: 0.0,
+                time: time
+            )
+            return NSNumber(value: value)
+        }
+    }
+
+    static func set(_ host: NSView, x: CGFloat, key: String) {
+        guard let layer = host.layer else { return }
+        layer.removeAnimation(forKey: key)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.setValue(x, forKeyPath: "transform.translation.x")
+        CATransaction.commit()
+    }
+
+    static func animate(
+        _ host: NSView,
+        to target: CGFloat,
+        samples: [NSNumber],
+        duration: TimeInterval,
+        beginTime: CFTimeInterval,
+        key: String
+    ) {
+        guard let layer = host.layer else { return }
+        let visibleLayer = layer.presentation() ?? layer
+        let from = (visibleLayer.value(forKeyPath: "transform.translation.x") as? NSNumber)?
+            .doubleValue ?? 0
+
+        layer.removeAnimation(forKey: key)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.setValue(target, forKeyPath: "transform.translation.x")
+        CATransaction.commit()
+
+        let distance = Double(target) - from
+        let animation = CAKeyframeAnimation(keyPath: "transform.translation.x")
+        animation.values = samples.map {
+            NSNumber(value: from + $0.doubleValue * distance)
+        }
+        animation.duration = duration
+        animation.calculationMode = .linear
+        if beginTime > 0 {
+            animation.beginTime = layer.convertTime(beginTime, from: nil)
+            animation.fillMode = .backwards
+        }
+        layer.add(animation, forKey: key)
+    }
+}
+
+private final class AnimatedContentPanelsView: NSView {
+    override var isFlipped: Bool { true }
+
+    let mainHost = NSHostingView(rootView: AnyView(EmptyView()))
+    let drillHost = NSHostingView(rootView: AnyView(EmptyView()))
+    var drillContentID = ""
+
+    private var showsDrill = false
+    private var hasConfiguredState = false
+    private var transitionGeneration = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+
+        for host in [mainHost, drillHost] {
+            host.wantsLayer = true
+            host.sizingOptions = []
+            host.safeAreaRegions = []
+            addSubview(host)
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        mainHost.frame = bounds
+        drillHost.frame = bounds
+    }
+
+    func prepareDrillContentOffscreen() {
+        layoutSubtreeIfNeeded()
+        let distance = bounds.width > 0 ? bounds.width : 270
+        HorizontalPanelMotion.set(
+            drillHost,
+            x: distance,
+            key: "contentHorizontalMotion"
+        )
+        let wasHidden = drillHost.isHidden
+        drillHost.isHidden = false
+        drillHost.layoutSubtreeIfNeeded()
+        drillHost.displayIfNeeded()
+        drillHost.isHidden = wasHidden
+    }
+
+    func configure(
+        showsDrill: Bool,
+        horizontalBeginTime: CFTimeInterval,
+        animated: Bool
+    ) {
+        layoutSubtreeIfNeeded()
+        let distance = bounds.width > 0 ? bounds.width : 270
+
+        if !hasConfiguredState {
+            hasConfiguredState = true
+            self.showsDrill = showsDrill
+            mainHost.isHidden = showsDrill
+            drillHost.isHidden = !showsDrill
+            HorizontalPanelMotion.set(
+                mainHost,
+                x: showsDrill ? -distance : 0,
+                key: "contentHorizontalMotion"
+            )
+            HorizontalPanelMotion.set(
+                drillHost,
+                x: showsDrill ? 0 : distance,
+                key: "contentHorizontalMotion"
+            )
+            return
+        }
+
+        guard self.showsDrill != showsDrill else { return }
+        self.showsDrill = showsDrill
+        transitionGeneration += 1
+        let generation = transitionGeneration
+        let outgoing = showsDrill ? mainHost : drillHost
+        let incoming = showsDrill ? drillHost : mainHost
+
+        outgoing.isHidden = false
+        incoming.isHidden = false
+        incoming.removeFromSuperview()
+        addSubview(incoming, positioned: .above, relativeTo: outgoing)
+        // Commit the destination SwiftUI/AppKit table before its layer starts
+        // moving. In particular, this creates the first visible NSTableView rows
+        // while the host is still outside the clipped viewport.
+        incoming.layoutSubtreeIfNeeded()
+        incoming.displayIfNeeded()
+
+        let outgoingTarget = showsDrill ? -distance : distance
+        guard animated else {
+            HorizontalPanelMotion.set(
+                outgoing,
+                x: outgoingTarget,
+                key: "contentHorizontalMotion"
+            )
+            HorizontalPanelMotion.set(
+                incoming,
+                x: 0,
+                key: "contentHorizontalMotion"
+            )
+            outgoing.isHidden = true
+            return
+        }
+
+        HorizontalPanelMotion.animate(
+            outgoing,
+            to: outgoingTarget,
+            samples: HorizontalPanelMotion.contentSamples,
+            duration: HorizontalPanelMotion.contentDuration,
+            beginTime: horizontalBeginTime,
+            key: "contentHorizontalMotion"
+        )
+        HorizontalPanelMotion.animate(
+            incoming,
+            to: 0,
+            samples: HorizontalPanelMotion.contentSamples,
+            duration: HorizontalPanelMotion.contentDuration,
+            beginTime: horizontalBeginTime,
+            key: "contentHorizontalMotion"
+        )
+
+        let wait = max(0, horizontalBeginTime - CACurrentMediaTime())
+            + HorizontalPanelMotion.contentDuration
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self, weak outgoing] in
+            guard let self,
+                  self.transitionGeneration == generation,
+                  let outgoing
+            else { return }
+            outgoing.isHidden = true
+        }
+    }
+}
+
+private struct AnimatedContentPanels: NSViewRepresentable {
+    let showsDrill: Bool
+    let horizontalBeginTime: CFTimeInterval
+    let drillContentID: String
+    let onDrillPrepared: (String) -> Void
+    let mainContent: AnyView
+    let drillContent: AnyView
+
+    func makeNSView(context: Context) -> AnimatedContentPanelsView {
+        let view = AnimatedContentPanelsView()
+        view.mainHost.rootView = mainContent
+        view.drillHost.rootView = drillContent
+        view.drillContentID = drillContentID
+        view.configure(
+            showsDrill: showsDrill,
+            horizontalBeginTime: horizontalBeginTime,
+            animated: false
+        )
+        return view
+    }
+
+    func updateNSView(_ view: AnimatedContentPanelsView, context: Context) {
+        // The main root observes MusicBridge and ThemeManager directly. Replace
+        // only the drill root when its playlist identity changes, avoiding a
+        // full hosted-tree reset during the height animation.
+        var preparedID: String?
+        if view.drillContentID != drillContentID {
+            view.drillContentID = drillContentID
+            view.drillHost.rootView = drillContent
+            if !drillContentID.isEmpty, !showsDrill {
+                preparedID = drillContentID
+            }
+        }
+        view.configure(
+            showsDrill: showsDrill,
+            horizontalBeginTime: horizontalBeginTime,
+            // A non-zero begin time is emitted only by an actual navigation
+            // action. `view.window` is transiently nil while NSPopover rebuilds
+            // its controller and must not decide whether that action animates.
+            animated: horizontalBeginTime > 0
+        )
+        if let preparedID {
+            view.prepareDrillContentOffscreen()
+            // State changes during updateNSView are invalid. Dispatch only the
+            // ready signal; the destination itself is already fully committed.
+            DispatchQueue.main.async {
+                onDrillPrepared(preparedID)
+            }
+        }
+    }
+}
+
+private final class TopPanelEffectView: NSVisualEffectView {
+    override var isFlipped: Bool { true }
+
+    let bottomSeparator: NSBox = {
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.autoresizingMask = [.width, .minYMargin]
+        return separator
+    }()
+
+    override func layout() {
+        super.layout()
+        bottomSeparator.frame = NSRect(
+            x: 0,
+            y: max(0, bounds.height - 1),
+            width: bounds.width,
+            height: 1
+        )
+    }
+}
+
+private final class AnimatedTopPanelView: NSView {
+    override var isFlipped: Bool { true }
+
+    let effectView = TopPanelEffectView()
+    let mainHost = NSHostingView(rootView: AnyView(EmptyView()))
+    let drillHost = NSHostingView(rootView: AnyView(EmptyView()))
+    var drillContentID = ""
+
+    private var expandedHeight: CGFloat = 193
+    private var collapsedHeight: CGFloat = 45
+    private var showsDrillHeader = false
+    private var hasConfiguredState = false
+    private var transitionGeneration = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        effectView.blendingMode = .withinWindow
+        effectView.material = .popover
+        effectView.state = .active
+        effectView.isEmphasized = true
+        effectView.wantsLayer = true
+        effectView.layer?.masksToBounds = true
+        mainHost.wantsLayer = true
+        drillHost.wantsLayer = true
+
+        mainHost.alphaValue = 1
+        drillHost.alphaValue = 0
+        effectView.addSubview(mainHost)
+        effectView.addSubview(drillHost)
+        // Keep the border independent from both fading content layers.
+        effectView.addSubview(effectView.bottomSeparator, positioned: .above, relativeTo: nil)
+        addSubview(effectView)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Let clicks outside the currently visible material reach the track list.
+        guard effectView.frame.contains(point) else { return nil }
+        return super.hitTest(point)
+    }
+
+    override func layout() {
+        super.layout()
+        // SwiftUI animates this representable's bounds with `.smooth`; keep the
+        // AppKit material view locked to those live bounds.
+        effectView.frame = bounds
+        mainHost.frame = NSRect(x: 0, y: 0, width: bounds.width, height: expandedHeight)
+        drillHost.frame = NSRect(x: 0, y: 0, width: bounds.width, height: collapsedHeight)
+    }
+
+    func configure(
+        expandedHeight: CGFloat,
+        collapsedHeight: CGFloat,
+        showsDrillHeader: Bool,
+        horizontalBeginTime: CFTimeInterval,
+        animated: Bool
+    ) {
+        self.expandedHeight = expandedHeight
+        self.collapsedHeight = collapsedHeight
+        layoutSubtreeIfNeeded()
+
+        if !hasConfiguredState {
+            hasConfiguredState = true
+            self.showsDrillHeader = showsDrillHeader
+            mainHost.alphaValue = showsDrillHeader ? 0 : 1
+            mainHost.isHidden = showsDrillHeader
+            drillHost.alphaValue = showsDrillHeader ? 1 : 0
+            drillHost.isHidden = !showsDrillHeader
+            let distance = bounds.width > 0 ? bounds.width : 270
+            HorizontalPanelMotion.set(
+                mainHost,
+                x: showsDrillHeader ? -distance : 0,
+                key: "topPanelHorizontalMotion"
+            )
+            HorizontalPanelMotion.set(
+                drillHost,
+                x: showsDrillHeader ? 0 : distance,
+                key: "topPanelHorizontalMotion"
+            )
+            needsLayout = true
+            return
+        }
+
+        guard self.showsDrillHeader != showsDrillHeader else { return }
+
+        self.showsDrillHeader = showsDrillHeader
+        transitionGeneration += 1
+        let generation = transitionGeneration
+        let outgoing = showsDrillHeader ? mainHost : drillHost
+        let incoming = showsDrillHeader ? drillHost : mainHost
+
+        outgoing.isHidden = false
+        incoming.isHidden = false
+        // Put the incoming content above the outgoing content for reliable hit
+        // testing while both layers overlap during the crossfade.
+        incoming.removeFromSuperview()
+        effectView.addSubview(
+            incoming,
+            positioned: .below,
+            relativeTo: effectView.bottomSeparator
+        )
+        incoming.layoutSubtreeIfNeeded()
+        incoming.displayIfNeeded()
+        incoming.alphaValue = 0
+        guard animated else {
+            outgoing.alphaValue = 0
+            outgoing.isHidden = true
+            incoming.alphaValue = 1
+            let distance = bounds.width > 0 ? bounds.width : 270
+            HorizontalPanelMotion.set(
+                outgoing,
+                x: showsDrillHeader ? -distance : distance,
+                key: "topPanelHorizontalMotion"
+            )
+            HorizontalPanelMotion.set(
+                incoming,
+                x: 0,
+                key: "topPanelHorizontalMotion"
+            )
+            return
+        }
+
+        // Run the macOS 14 `smooth` curve entirely on the hosting layers. The
+        // sampled keyframes are composited without publishing per-frame SwiftUI
+        // state or recomputing either header's body.
+        let distance = bounds.width > 0 ? bounds.width : 270
+        HorizontalPanelMotion.animate(
+            outgoing,
+            to: showsDrillHeader ? -distance : distance,
+            samples: HorizontalPanelMotion.topSamples,
+            duration: HorizontalPanelMotion.topDuration,
+            beginTime: horizontalBeginTime,
+            key: "topPanelHorizontalMotion"
+        )
+        HorizontalPanelMotion.animate(
+            incoming,
+            to: 0,
+            samples: HorizontalPanelMotion.topSamples,
+            duration: HorizontalPanelMotion.topDuration,
+            beginTime: horizontalBeginTime,
+            key: "topPanelHorizontalMotion"
+        )
+
+        // Fade the old content from the instant the transition starts.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.48
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            outgoing.animator().alphaValue = 0
+        } completionHandler: { [weak self, weak outgoing] in
+            guard let self,
+                  self.transitionGeneration == generation,
+                  let outgoing
+            else { return }
+            outgoing.isHidden = true
+        }
+
+        // Start revealing the new content 0.30 seconds before the old content
+        // finishes. It deliberately completes after the geometry transitions.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self, weak incoming] in
+            guard let self,
+                  self.transitionGeneration == generation,
+                  let incoming
+            else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.48
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                incoming.animator().alphaValue = 1
+            }
+        }
+    }
+}
+
+private struct AnimatedTopPanel: NSViewRepresentable {
+    let showsDrillHeader: Bool
+    let horizontalBeginTime: CFTimeInterval
+    let drillContentID: String
+    let expandedHeight: CGFloat
+    let collapsedHeight: CGFloat
+    let mainContent: AnyView
+    let drillContent: AnyView
+
+    func makeNSView(context: Context) -> AnimatedTopPanelView {
+        let view = AnimatedTopPanelView()
+        view.mainHost.rootView = mainContent
+        view.drillHost.rootView = drillContent
+        view.drillContentID = drillContentID
+        view.configure(
+            expandedHeight: expandedHeight,
+            collapsedHeight: collapsedHeight,
+            showsDrillHeader: showsDrillHeader,
+            horizontalBeginTime: horizontalBeginTime,
+            animated: false
+        )
+        return view
+    }
+
+    func updateNSView(_ view: AnimatedTopPanelView, context: Context) {
+        // Both roots observe the shared environment objects. Keep them alive
+        // during the height animation, and replace only playlist-specific
+        // header content when its identity actually changes.
+        if view.drillContentID != drillContentID {
+            view.drillContentID = drillContentID
+            view.drillHost.rootView = drillContent
+        }
+        view.configure(
+            expandedHeight: expandedHeight,
+            collapsedHeight: collapsedHeight,
+            showsDrillHeader: showsDrillHeader,
+            horizontalBeginTime: horizontalBeginTime,
+            animated: horizontalBeginTime > 0
+        )
+    }
+}
+
 // MARK: - VolumeView
 // Reads volume from MusicBridge (an @EnvironmentObject on the parent view).
 // No longer observes AudioPlayer directly — eliminates a Combine subscription
@@ -414,7 +1061,7 @@ struct VolumeView: View {
                     get: { Double(music.volume) },
                     set: { music.setVolume(Float($0)) }
                 ),
-                fillColor: NSColor(theme.theme.color),
+                fillColor: NSColor(theme.color),
                 isDark: colorScheme == .dark
             )
             Image(systemName: "speaker.wave.3.fill")
@@ -429,213 +1076,6 @@ struct VolumeView: View {
         .padding(.bottom, 10)
     }
 }
-// MARK: - FolderHeaderRowView
-
-struct FolderHeaderRowView: View {
-    let group: PlaylistGroup
-    let collapsed: Bool
-    let themeColor: Color
-    let onTap: () -> Void
-
-    var body: some View {
-        let indent: CGFloat = 14 + CGFloat(max(0, group.indentLevel - 1)) * 12
-        Button(action: onTap) {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.secondary.opacity(0.7))
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-                    .animation(.easeInOut(duration: 0.18), value: collapsed)
-                    .frame(width: 12)
-                if let img = TrackArtworkCache.shared.image(forKey: group.representativeTrackKey ?? "") {
-                    Image(nsImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 14, height: 14)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                } else {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-                Text(group.folderName)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.leading, indent)
-            .padding(.trailing, 14)
-            .padding(.top, 6)
-            .padding(.bottom, 3)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .frame(height: 26)
-    }
-}
-
-// MARK: - PlaylistItemRowView
-
-struct PlaylistItemRowView: View {
-    let group: PlaylistGroup
-    let pl: PlaylistInfo
-    let isActive: Bool
-    let isPlaying: Bool
-    let themeColor: Color
-    let onPlay:  () -> Void
-    let onDrill: () -> Void
-
-    var body: some View {
-        let leadingPad: CGFloat = group.isFolder
-            ? 14 + CGFloat(max(0, group.indentLevel - 1)) * 12 + 20
-            : 14
-        let dividerPad: CGFloat = group.isFolder
-            ? 14 + CGFloat(max(0, group.indentLevel - 1)) * 12 + 56
-            : 50
-
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                Button(action: onPlay) {
-                    HStack(spacing: 8) {
-                        if let cg = TrackArtworkCache.shared.cgImage(forKey: pl.representativeTrackKey ?? "") {
-                            Image(decorative: cg, scale: 2.0)
-                                .frame(width: 28, height: 28)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        } else {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(isActive ? Color.white.opacity(0.25) : Color.secondary.opacity(0.12))
-                                    .frame(width: 28, height: 28)
-                                Image(systemName: pl.kind.icon)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(isActive ? .white : .secondary)
-                            }
-                        }
-                        Text(pl.name)
-                            .font(.system(size: 12))
-                            .foregroundColor(isActive ? .white : .primary)
-                            .lineLimit(1)
-                        Spacer()
-                        if isActive && isPlaying {
-                            Image(systemName: "speaker.wave.2.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.9))
-                        } else {
-                            Text("\(pl.trackCount)")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(isActive ? .white.opacity(0.8) : .secondary)
-                        }
-                    }
-                    .padding(.leading, leadingPad)
-                    .padding(.trailing, 4)
-                    .padding(.vertical, 5)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Button(action: onDrill) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(isActive ? .white.opacity(0.7) : .secondary.opacity(0.6))
-                        .frame(width: 24, height: 38)
-                        .padding(.trailing, 6)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isActive ? themeColor.opacity(0.85) : Color.clear)
-
-            Divider().padding(.leading, dividerPad)
-        }
-        .id(pl.name)
-    }
-}
-
-// MARK: - TrackRowView
-// 独立 struct：props 不变时 SwiftUI 跳过 body 重算，LazyVStack 下只有可见行参与渲染
-
-struct TrackRowView: View {
-    let track: PlaylistTrackItem
-    let index: Int
-    let isCurrent: Bool
-    let isPlaying: Bool
-    let showTrackNumber: Bool
-    let themeColor: Color
-    let onTap: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Button(action: onTap) {
-                HStack(spacing: 8) {
-
-                    // 封面（56px@scale:2 = 28pt，零缩放，CGImage 直通 GPU 无 NSImage 转换开销）
-                    if let cg = TrackArtworkCache.shared.cgImage(for: track) {
-                        Image(decorative: cg, scale: 2.0)
-                            .frame(width: 28, height: 28)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                            .opacity(isCurrent ? 0.88 : 1.0)
-                    } else {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(isCurrent ? Color.white.opacity(0.15) : Color.secondary.opacity(0.12))
-                                .frame(width: 28, height: 28)
-                            Image(systemName: "music.note")
-                                .font(.system(size: 11))
-                                .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary)
-                        }
-                    }
-
-                    // 标题 + 艺术家
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Text(track.title)
-                                .font(.system(size: 12))
-                                .foregroundColor(isCurrent ? .white : .primary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            if isCurrent && isPlaying {
-                                Image(systemName: "speaker.wave.2.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.white.opacity(0.9))
-                                    .fixedSize()
-                            }
-                        }
-                        Text(track.artist)
-                            .font(.system(size: 10))
-                            .foregroundColor(isCurrent ? .white.opacity(0.75) : .secondary)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // 编号右对齐
-                    if showTrackNumber && track.trackNumber > 0 {
-                        Text(track.discNumber > 1
-                             ? "\(track.discNumber)-\(track.trackNumber)"
-                             : "\(track.trackNumber)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary)
-                            .frame(width: 28, alignment: .trailing)
-                    } else {
-                        Text("\(index + 1)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(isCurrent ? .white.opacity(0.6) : .secondary.opacity(0.5))
-                            .frame(width: 28, alignment: .trailing)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 5)
-                .background(isCurrent ? themeColor.opacity(0.85) : Color.clear)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .frame(height: 38)
-
-            Divider().padding(.leading, 56)
-        }
-    }
-}
-
 // MARK: - WaveformBarsView
 
 struct WaveformBarsView: View {
@@ -666,7 +1106,7 @@ struct WaveformBarsView: View {
         }
         .frame(width: 6 * barW + 5 * gap, height: maxH, alignment: .center)
         .onAppear { liveIsPlaying = isPlaying }
-        .onChange(of: isPlaying) { newVal in
+        .onChange(of: isPlaying) { _, newVal in
             if newVal {
                 withAnimation(.easeOut(duration: 0.2)) {
                     liveIsPlaying = true

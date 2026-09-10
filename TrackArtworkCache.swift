@@ -60,7 +60,7 @@ final class TrackArtworkCache {
 
     /// app 启动时调用一次，后续读取全走内存池。
     /// 在后台线程调用，完成后回调主线程。
-    func loadFromDisk(completion: @escaping () -> Void) {
+    func loadFromDisk(completion: @MainActor @escaping () -> Void) {
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             self.doLoadFromDisk()
@@ -180,15 +180,27 @@ final class TrackArtworkCache {
             try? data.write(to: url, options: .atomic)
         }
 
-        // 更新内存池（只加载新增的 hash）
+        // Load new images without holding the cache lock. Row rendering reads
+        // this cache on the main thread, so disk I/O inside the critical section
+        // can otherwise stall scrolling for multiple frames.
         lock.lock()
-        trackIndex = newIndex
-        for (_, hash8) in newIndex where pool[hash8] == nil {
+        let existingHashesInMemory = Set(cgPool.keys)
+        lock.unlock()
+
+        var newlyLoaded: [(hash: String, image: NSImage, cgImage: CGImage)] = []
+        for hash8 in Set(newIndex.values) where !existingHashesInMemory.contains(hash8) {
             if let rawURL = rawURL(hash8: hash8),
                let (img, cgImg) = imageFromRawFile(url: rawURL) {
-                pool[hash8] = img
-                cgPool[hash8] = cgImg
+                newlyLoaded.append((hash8, img, cgImg))
             }
+        }
+
+        // Publish the completed snapshot with one short critical section.
+        lock.lock()
+        trackIndex = newIndex
+        for entry in newlyLoaded where cgPool[entry.hash] == nil {
+            pool[entry.hash] = entry.image
+            cgPool[entry.hash] = entry.cgImage
         }
         lock.unlock()
 
@@ -229,6 +241,39 @@ final class TrackArtworkCache {
         let img = trackIndex[key].flatMap { cgPool[$0] }
         lock.unlock()
         return img
+    }
+
+    /// Resolve a playlist in one pass. Dictionary snapshots are copy-on-write,
+    /// so the cache lock is held only long enough to retain their storage. Rows
+    /// then index the returned array without rebuilding keys or locking while
+    /// the table is scrolling. Repeated artwork remains one shared CGImage.
+    func cgImages(for items: [PlaylistTrackItem]) -> [CGImage?] {
+        lock.lock()
+        let indexSnapshot = trackIndex
+        let imageSnapshot = cgPool
+        lock.unlock()
+
+        return items.map { item in
+            let key = trackKey(
+                title: item.title,
+                artist: item.artist,
+                album: item.album
+            )
+            return indexSnapshot[key].flatMap { imageSnapshot[$0] }
+        }
+    }
+
+    /// Resolve representative artwork for playlist/folder rows with one cache
+    /// snapshot. A nil key deliberately produces the placeholder for that row.
+    func cgImages(forKeys keys: [String?]) -> [CGImage?] {
+        lock.lock()
+        let indexSnapshot = trackIndex
+        let imageSnapshot = cgPool
+        lock.unlock()
+
+        return keys.map { key in
+            key.flatMap { indexSnapshot[$0] }.flatMap { imageSnapshot[$0] }
+        }
     }
 
     // MARK: - 清空（手动刷新时）

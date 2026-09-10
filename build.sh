@@ -26,7 +26,7 @@ ICON_DST="$RESOURCES/AppIcon.icns"
 
 SDK="$(xcrun --show-sdk-path)"
 ARCH="$(uname -m)"
-TARGET="$ARCH-apple-macos13.0"
+TARGET="$ARCH-apple-macos14.0"
 
 # ---------- 开始 ----------
 
@@ -88,12 +88,12 @@ cat > "$CONTENTS/Info.plist" << PLIST
   <key>CFBundleName</key>                <string>$APP_NAME</string>
   <key>CFBundleDisplayName</key>         <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>          <string>com.linkapps.BarMusic</string>
-  <key>CFBundleVersion</key>             <string>3</string>
-  <key>CFBundleShortVersionString</key>  <string>2.1.4</string>
+  <key>CFBundleVersion</key>             <string>4</string>
+  <key>CFBundleShortVersionString</key>  <string>2.2.0</string>
   <key>CFBundleExecutable</key>          <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>         <string>APPL</string>
   <key>NSPrincipalClass</key>            <string>NSApplication</string>
-  <key>LSMinimumSystemVersion</key>      <string>13.0</string>
+  <key>LSMinimumSystemVersion</key>      <string>14.0</string>
   <key>LSUIElement</key>                 <true/>
   <key>NSAppleMusicUsageDescription</key>
   <string>需要访问您的音乐库以读取和播放本地播放列表。</string>
