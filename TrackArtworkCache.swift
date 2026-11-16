@@ -17,7 +17,30 @@ import iTunesLibrary
 
 final class TrackArtworkCache {
 
-    static let shared = TrackArtworkCache()
+    /// 音乐库模式：Application Support/BarMusic/artwork
+    static let library: TrackArtworkCache = {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("BarMusic/artwork", isDirectory: true)
+        return TrackArtworkCache(directory: base)
+    }()
+
+    /// 文件夹模式：封面缓存放在用户所选文件夹的 .bmcache/artwork 里。
+    static func folder(at root: URL) -> TrackArtworkCache {
+        TrackArtworkCache(directory: root.appendingPathComponent(".bmcache/artwork", isDirectory: true))
+    }
+
+    // 当前模式使用的缓存。`shared` 保持原有调用方式不变，切换模式时调用 activate。
+    private static let currentLock = NSLock()
+    private static var current: TrackArtworkCache = TrackArtworkCache.library
+    static var shared: TrackArtworkCache {
+        currentLock.lock(); defer { currentLock.unlock() }
+        return current
+    }
+    static func activate(_ cache: TrackArtworkCache) {
+        currentLock.lock(); defer { currentLock.unlock() }
+        current = cache
+    }
 
     // 像素尺寸：56×56 在 @2x 屏上渲染为 28pt，1:1 映射无缩放损耗
     static let thumbSize = 56
@@ -37,15 +60,11 @@ final class TrackArtworkCache {
     private let artworkDir: URL?
     private let indexURL: URL?
 
-    private init() {
-        if let appSupport = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let dir = appSupport
-                .appendingPathComponent("BarMusic", isDirectory: true)
-                .appendingPathComponent("artwork", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            artworkDir = dir
-            indexURL = dir.appendingPathComponent("artworkIndex.json")
+    private init(directory: URL?) {
+        if let directory {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            artworkDir = directory
+            indexURL = directory.appendingPathComponent("artworkIndex.json")
         } else {
             artworkDir = nil
             indexURL = nil
@@ -108,6 +127,22 @@ final class TrackArtworkCache {
     /// 在后台线程调用。增量构建：已有哈希的文件不重复写。
     func buildCache(for playlists: [ITLibPlaylist],
                     progress: ((Int, Int) -> Void)? = nil) {
+        // 收集所有需要处理的唯一曲目（用 trackKey 去重）
+        var entries: [(key: String, url: URL)] = []
+        var seen = Set<String>()
+        for pl in playlists {
+            for item in pl.items {
+                guard let url = item.location else { continue }
+                let key = trackKey(item)
+                if seen.insert(key).inserted { entries.append((key, url)) }
+            }
+        }
+        buildCache(entries: entries, progress: progress)
+    }
+
+    /// 通用构建入口：entries 为 (trackKey, 音频文件 URL)，文件夹模式直接使用它。
+    func buildCache(entries allItems: [(key: String, url: URL)],
+                    progress: ((Int, Int) -> Void)? = nil) {
         guard let dir = artworkDir else { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
@@ -119,16 +154,6 @@ final class TrackArtworkCache {
             existingIndex = decoded
         }
 
-        // 收集所有需要处理的唯一曲目（用 trackKey 去重）
-        var allItems: [ITLibMediaItem] = []
-        var seen = Set<String>()
-        for pl in playlists {
-            for item in pl.items {
-                let key = trackKey(item)
-                if seen.insert(key).inserted { allItems.append(item) }
-            }
-        }
-
         let total = allItems.count
         var done = 0
         var newIndex = existingIndex
@@ -136,13 +161,13 @@ final class TrackArtworkCache {
         // 已存在哈希的 .raw 文件集合，避免重复写盘
         var existingHashes = Set(existingIndex.values)
 
-        for item in allItems {
+        for entry in allItems {
             defer {
                 done += 1
                 if done % 50 == 0 { progress?(done, total) }
             }
 
-            let key = trackKey(item)
+            let key = entry.key
 
             // 如果已有映射且对应 .raw 文件存在，跳过
             if let h = existingIndex[key],
@@ -151,9 +176,7 @@ final class TrackArtworkCache {
             }
 
             // 提取封面原始 Data
-            guard let url = item.location,
-                  let artData = artworkData(from: url)
-            else { continue }
+            guard let artData = artworkData(from: entry.url) else { continue }
 
             // 计算哈希（对原始 Data，不对缩略图）
             let hash8 = sha256prefix8(artData)

@@ -44,6 +44,7 @@ struct PlaylistNSTableView: NSViewRepresentable {
 
     let items: [MusicBridge.FlatPlaylistItem]
     let currentPlaylistName: String
+    let currentTrackPath: String
     let isPlaying: Bool
     let themeColor: Color
     let artworkCacheRevision: Int
@@ -52,6 +53,7 @@ struct PlaylistNSTableView: NSViewRepresentable {
     var onPlay:         (String) -> Void
     var onDrill:        (String) -> Void
     var onToggleFolder: (String) -> Void
+    var onPlayTrack:    (String, Int) -> Void = { _, _ in }
 
     func makeCoordinator() -> PlaylistCoordinator { PlaylistCoordinator() }
 
@@ -94,6 +96,7 @@ struct PlaylistNSTableView: NSViewRepresentable {
         // 只有影响显示的状态变化才触发可见行刷新
         let needsVisibleReload = !needsFullReload && (
             c.currentPlaylistName != currentPlaylistName ||
+            c.currentTrackPath != currentTrackPath ||
             c.isPlaying != isPlaying ||
             c.themeColor != themeColor ||
             artworkChanged
@@ -101,6 +104,8 @@ struct PlaylistNSTableView: NSViewRepresentable {
 
         c.items               = items
         c.currentPlaylistName = currentPlaylistName
+        c.currentTrackPath    = currentTrackPath
+        c.onPlayTrack         = onPlayTrack
         c.isPlaying           = isPlaying
         c.themeColor          = themeColor
         c.artworkCacheRevision = artworkCacheRevision
@@ -116,6 +121,8 @@ struct PlaylistNSTableView: NSViewRepresentable {
                     return group.representativeTrackKey
                 case .playlist(_, let info):
                     return info.representativeTrackKey
+                case .track(_, let t, _, _):
+                    return TrackArtworkCache.shared.trackKey(title: t.title, artist: t.artist, album: t.album)
                 }
             }
             c.artworkImages = TrackArtworkCache.shared.cgImages(forKeys: keys)
@@ -199,6 +206,8 @@ final class PlaylistCoordinator: NSObject, NSTableViewDataSource, NSTableViewDel
     let tableView = NSTableView()
     var items: [MusicBridge.FlatPlaylistItem] = []
     var currentPlaylistName: String = ""
+    var currentTrackPath: String = ""
+    var onPlayTrack: (String, Int) -> Void = { _, _ in }
     var isPlaying: Bool = false
     var themeColor: Color = .pink
     var artworkCacheRevision: Int = -1
@@ -215,6 +224,7 @@ final class PlaylistCoordinator: NSObject, NSTableViewDataSource, NSTableViewDel
         switch items[row] {
         case .folderHeader: return 27
         case .playlist:     return 39
+        case .track:        return 40
         }
     }
 
@@ -259,6 +269,27 @@ final class PlaylistCoordinator: NSObject, NSTableViewDataSource, NSTableViewDel
                 artwork: row < artworkImages.count ? artworkImages[row] : nil,
                 onPlay:  { [weak self] in self?.onPlay(pl.name) },
                 onDrill: { [weak self] in self?.onDrill(pl.name) }
+            )
+            return cell
+
+        case .track(let group, let track, let dirKey, let index):
+            let id = NSUserInterfaceItemIdentifier("track")
+            let cell = tableView.makeView(withIdentifier: id, owner: nil)
+                as? NativeTrackCellView
+                ?? {
+                    let view = NativeTrackCellView()
+                    view.identifier = id
+                    view.autoresizingMask = [.width, .height]
+                    return view
+                }()
+            cell.configure(
+                track: track, index: index,
+                isCurrent: track.url?.path == currentTrackPath,
+                isPlaying: isPlaying, showTrackNumber: false,
+                themeColor: themeColor,
+                artwork: row < artworkImages.count ? artworkImages[row] : nil,
+                leading: group.isFolder ? CGFloat(max(0, group.indentLevel - 1)) * 12 + 20 : 0,
+                onTap: { [weak self] in self?.onPlayTrack(dirKey, index) }
             )
             return cell
         }
@@ -381,7 +412,7 @@ private final class NativeFolderCellView: NSTableCellView {
     }
 
     func configure(group: PlaylistGroup, collapsed: Bool, artwork: CGImage?, onTap: @escaping () -> Void) {
-        name = group.folderName
+        name = group.displayName
         indent = 14 + CGFloat(max(0, group.indentLevel - 1)) * 12
         self.collapsed = collapsed
         hasArtwork = artwork != nil
@@ -391,7 +422,7 @@ private final class NativeFolderCellView: NSTableCellView {
         artworkLayer.contents = artwork
         CATransaction.commit()
         updateColors()
-        setAccessibilityLabel(group.folderName)
+        setAccessibilityLabel(group.displayName)
         needsLayout = true
         needsDisplay = true
     }
@@ -600,7 +631,7 @@ private final class NativePlaylistCellView: NSTableCellView {
         onPlay: @escaping () -> Void,
         onDrill: @escaping () -> Void
     ) {
-        title = pl.name
+        title = pl.displayName
         count = "\(pl.trackCount)"
         leadingPad = group.isFolder
             ? 14 + CGFloat(max(0, group.indentLevel - 1)) * 12 + 20
@@ -627,7 +658,7 @@ private final class NativePlaylistCellView: NSTableCellView {
         playingTintLayer.isHidden = !(isActive && isPlaying)
         CATransaction.commit()
         updateColors()
-        setAccessibilityLabel("\(pl.name), \(pl.trackCount)")
+        setAccessibilityLabel("\(pl.displayName), \(pl.trackCount)")
         needsLayout = true
         needsDisplay = true
     }
@@ -854,6 +885,7 @@ private final class NativeTrackCellView: NSTableCellView {
     private var hasArtwork = false
     private var themeColor = NSColor.systemPink
     private var onTap: (() -> Void)?
+    private var leading: CGFloat = 0     // 在文件夹里缩进时使用
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -921,13 +953,13 @@ private final class NativeTrackCellView: NSTableCellView {
         defer { CATransaction.commit() }
 
         let artworkSize: CGFloat = 28
-        let textX: CGFloat = 50
+        let textX: CGFloat = 50 + leading
         let numberWidth: CGFloat = 28
         let trailingPadding: CGFloat = 14
         let numberX = max(textX, bounds.width - trailingPadding - numberWidth)
         let textRight = numberX - 8
 
-        artworkLayer.frame = NSRect(x: 14, y: 5, width: artworkSize, height: artworkSize)
+        artworkLayer.frame = NSRect(x: 14 + leading, y: 5, width: artworkSize, height: artworkSize)
         placeholderTintLayer.frame = artworkLayer.bounds.insetBy(dx: 7, dy: 7)
         placeholderMaskLayer.frame = placeholderTintLayer.bounds
         if isCurrent && isPlaying {
@@ -965,7 +997,7 @@ private final class NativeTrackCellView: NSTableCellView {
             numberColor = NSColor.secondaryLabelColor.withAlphaComponent(0.5)
         }
 
-        let textX: CGFloat = 50
+        let textX: CGFloat = 50 + leading
         let numberWidth: CGFloat = 28
         let numberX = max(textX, bounds.width - 14 - numberWidth)
         let textRight = numberX - 8
@@ -1007,7 +1039,7 @@ private final class NativeTrackCellView: NSTableCellView {
         )
 
         NSColor.secondaryLabelColor.withAlphaComponent(0.18).setFill()
-        NSRect(x: 56, y: max(0, bounds.height - 1), width: max(0, bounds.width - 56), height: 1).fill()
+        NSRect(x: 56 + leading, y: max(0, bounds.height - 1), width: max(0, bounds.width - 56 - leading), height: 1).fill()
     }
 
     func configure(
@@ -1018,9 +1050,11 @@ private final class NativeTrackCellView: NSTableCellView {
         showTrackNumber: Bool,
         themeColor: Color,
         artwork: CGImage?,
+        leading: CGFloat = 0,
         onTap: @escaping () -> Void
     ) {
         self.onTap = onTap
+        self.leading = leading
         title = track.title
         artist = track.artist
         number = showTrackNumber && track.trackNumber > 0

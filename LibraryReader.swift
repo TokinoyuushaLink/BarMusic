@@ -21,6 +21,10 @@ struct PlaylistInfo: Identifiable, Equatable {
     var artworkImage: NSImage?          // 运行时由 TrackArtworkCache 填充，不持久化
     var isFolder: Bool
     var representativeTrackKey: String? // 第一首有封面的曲目 key，持久化到 playlists.cache
+    /// 展示名。`name` 是列表的唯一标识（音乐库模式下是列表名，文件夹模式下是目录路径），
+    /// 同名目录很常见，所以界面上显示的是 `displayName`。nil 时回退到 `name`。
+    var title: String? = nil
+    var displayName: String { title ?? name }
 
     static func == (lhs: PlaylistInfo, rhs: PlaylistInfo) -> Bool { lhs.id == rhs.id }
 
@@ -46,6 +50,10 @@ struct PlaylistGroup: Identifiable {
     var ancestorFolderNames: [String]
     var playlists: [PlaylistInfo]
     var representativeTrackKey: String? // 文件夹的代表曲目 key
+    /// 展示名。`folderName` 是文件夹的唯一标识（折叠状态、祖先链都用它），
+    /// 文件夹模式下是目录路径。nil 时回退到 `folderName`。
+    var title: String? = nil
+    var displayName: String { title ?? folderName }
 }
 
 // MARK: - LibraryReader

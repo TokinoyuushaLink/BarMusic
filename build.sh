@@ -89,7 +89,7 @@ cat > "$CONTENTS/Info.plist" << PLIST
   <key>CFBundleDisplayName</key>         <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>          <string>com.linkapps.BarMusic</string>
   <key>CFBundleVersion</key>             <string>4</string>
-  <key>CFBundleShortVersionString</key>  <string>2.2.0</string>
+  <key>CFBundleShortVersionString</key>  <string>2.3.0</string>
   <key>CFBundleExecutable</key>          <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>         <string>APPL</string>
   <key>NSPrincipalClass</key>            <string>NSApplication</string>
@@ -97,6 +97,16 @@ cat > "$CONTENTS/Info.plist" << PLIST
   <key>LSUIElement</key>                 <true/>
   <key>NSAppleMusicUsageDescription</key>
   <string>需要访问您的音乐库以读取和播放本地播放列表。</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>文件夹模式需要读取您指定的文件夹中的音乐文件。</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>文件夹模式需要读取您指定的文件夹中的音乐文件。</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>文件夹模式需要读取您指定的文件夹中的音乐文件。</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>文件夹模式需要读取外置磁盘上您指定的文件夹中的音乐文件。</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>文件夹模式需要读取网络磁盘上您指定的文件夹中的音乐文件。</string>
   $ICON_KEY
 </dict>
 </plist>

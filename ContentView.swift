@@ -224,7 +224,7 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                 if !music.currentPlaylistName.isEmpty {
-                    Text(music.currentPlaylistName)
+                    Text(music.currentPlaylistTitle)
                         .font(.system(size: 10))
                         .foregroundColor(theme.color.opacity(0.8))
                         .lineLimit(1)
@@ -330,16 +330,20 @@ struct ContentView: View {
 
     private var playlistHeaderIdleContent: some View {
         HStack(alignment: .center) {
-            Image(systemName: "music.note.list")
+            Image(systemName: music.libraryMode == .folder ? "folder" : "music.note.list")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
-            Text(L.playlists)
+            // 文件夹模式下标题显示所选文件夹的名字
+            Text(music.libraryMode == .folder
+                 ? (music.folderRootURL?.lastPathComponent ?? L.modeFolder)
+                 : L.playlists)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.primary)
+                .lineLimit(1)
 
             Spacer()
 
-            let total = music.playlistGroups.reduce(0) { $0 + $1.playlists.count }
+            let total = music.listTotalCount
             if total > 0 {
                 Text("\(total)")
                     .font(.system(size: 10, design: .monospaced))
@@ -385,6 +389,7 @@ struct ContentView: View {
         PlaylistNSTableView(
             items: music.flatPlaylistItems,
             currentPlaylistName: music.currentPlaylistName,
+            currentTrackPath: music.currentTrackPath,
             isPlaying: music.isPlaying,
             themeColor: theme.color,
             artworkCacheRevision: music.artworkCacheRevision,
@@ -397,17 +402,15 @@ struct ContentView: View {
             },
             onToggleFolder: { folderName in
                 music.toggleFolderCollapse(folderName)
-            }
+            },
+            onPlayTrack: { music.playFolderTrack(dirKey: $0, index: $1) }
         )
     }
 
     // MARK: - Drill-down Header
 
     func drillHeader(playlistName: String) -> some View {
-        let repKey = music.playlistGroups
-            .flatMap { $0.playlists }
-            .first { $0.name == playlistName }?
-            .representativeTrackKey ?? ""
+        let repKey = music.representativeKey(forPlaylist: playlistName) ?? ""
         let backButton = Button {
             music.closePlaylistDetail()
         } label: {
@@ -455,7 +458,7 @@ struct ContentView: View {
         return ZStack {
             HStack(spacing: 6) {
                 artworkView
-                Text(playlistName)
+                Text(music.playlistTitle(for: playlistName))
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
             }

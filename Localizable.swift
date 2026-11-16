@@ -41,8 +41,19 @@ enum L {
     // Bottom bar
     static var refreshPlaylists: String { isChinese ? "刷新列表" : "Refresh Playlists" }
 
+    // Library mode
+    static var modeMusicLibrary: String { isChinese ? "音乐库模式" : "Music Library Mode" }
+    static var modeFolder:       String { isChinese ? "文件夹模式" : "Folder Mode" }
+    static var changeFolder:     String { isChinese ? "更改文件夹…" : "Change Folder…" }
+    static var chooseFolder:     String { isChinese ? "选择"       : "Choose" }
+    static var chooseFolderMessage: String {
+        isChinese ? "选择要作为曲库的文件夹。会递归读取其中的子文件夹和音频文件，支持符号链接。"
+                  : "Choose the folder to use as your library. Subfolders and audio files are read recursively; symbolic links are followed."
+    }
+    static var scanningFolder:   String { isChinese ? "扫描文件夹..." : "Scanning folder..." }
+
     // Settings menu
-    static var settings:         String { isChinese ? "设置"     : "Settings" }
+    static var settings:        String { isChinese ? "设置"     : "Settings" }
     static var waveformBars:     String { isChinese ? "波形显示"  : "Waveform Bars" }
     static var playbackInterval: String { isChinese ? "播放间隔"  : "Playback Interval" }
     static var switchImmediately:String { isChinese ? "立即切换"  : "Switch Immediately" }

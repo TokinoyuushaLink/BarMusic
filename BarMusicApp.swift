@@ -185,6 +185,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func showSettingsMenu(_ sender: NSStatusBarButton) {
         let menu = NSMenu()
 
+        // Library mode — two flat items, separated from the rest by dividers
+        let libraryModeItem = NSMenuItem(title: L.modeMusicLibrary,
+                                         action: #selector(selectMusicLibraryMode),
+                                         keyEquivalent: "")
+        libraryModeItem.target = self
+        libraryModeItem.state  = (music.libraryMode == .musicLibrary) ? .on : .off
+        menu.addItem(libraryModeItem)
+
+        let folderModeItem = NSMenuItem(title: L.modeFolder,
+                                        action: #selector(selectFolderMode),
+                                        keyEquivalent: "")
+        folderModeItem.target = self
+        folderModeItem.state  = (music.libraryMode == .folder) ? .on : .off
+        if let root = music.folderRootURL {
+            folderModeItem.toolTip = root.path
+            if #available(macOS 14.4, *) { folderModeItem.subtitle = root.lastPathComponent }
+        }
+        menu.addItem(folderModeItem)
+
+        menu.addItem(.separator())
+
         // Theme submenu
         let themeItem = NSMenuItem(title: L.themeColor, action: nil, keyEquivalent: "")
         let sub = NSMenu()
@@ -239,6 +260,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         refresh.target = self
         menu.addItem(refresh)
 
+        if music.libraryMode == .folder {
+            let change = NSMenuItem(title: L.changeFolder,
+                                    action: #selector(changeFolder),
+                                    keyEquivalent: "")
+            change.target = self
+            if let root = music.folderRootURL { change.toolTip = root.path }
+            menu.addItem(change)
+        }
+
         menu.addItem(.separator())
 
         // Quit
@@ -252,6 +282,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusItem.button?.performClick(nil)
         // Clear menu after use so left-click works normally next time
         DispatchQueue.main.async { self.statusItem.menu = nil }
+    }
+
+    @objc func selectMusicLibraryMode() {
+        music.setLibraryMode(.musicLibrary)
+    }
+
+    @objc func selectFolderMode() {
+        // 还没指定过文件夹：先让用户选；取消则保持当前模式。
+        if music.folderRootURL == nil {
+            promptForFolder()
+        } else {
+            music.setLibraryMode(.folder)
+        }
+    }
+
+    @objc func changeFolder() {
+        promptForFolder()
+    }
+
+    private func promptForFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories    = true
+        panel.canChooseFiles          = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories    = false
+        panel.prompt                  = L.chooseFolder
+        panel.message                 = L.chooseFolderMessage
+        if let current = music.folderRootURL { panel.directoryURL = current }
+
+        // LSUIElement app: bring the panel to the front explicitly.
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        music.setFolderRoot(url)
     }
 
     @objc func toggleWaveform() {

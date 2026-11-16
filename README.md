@@ -16,6 +16,7 @@ macOS menubar Apple Music standlone control app\
 - 功耗极低！播放过程中只占用0.8w
 - 实时波形显示
 - 支持嵌套文件夹视图
+- 两种模式（右键菜单切换）：音乐库模式，或文件夹模式——指定任意文件夹，递归读取其中的子文件夹和音频文件（支持符号链接），缓存保存在该文件夹内的 .bmcache
 - 可以进入列表，播放特定的歌曲
 - 手动刷新，非必要不刷新
 - 带有基本的音乐控制功能，播放暂停，快进快退，乱序单曲顺序播放，按照专辑曲目顺序播放，音量条。
@@ -43,6 +44,7 @@ A menu bar controller app for Apple Music.
 - Extremely low power consumption — only around 0.8W during playback
 - Realtime Waveline generate
 - Supports nested folder views, with collapse states saved to disk
+- Two modes, switched from the right-click menu: Music Library mode, or Folder mode — pick any folder and it is read recursively, subfolders and audio files alike (symbolic links are followed); the cache lives in a `.bmcache` inside that folder
 - Enter the playlist and play specific song
 - Manual refresh only — no unnecessary background refreshing
 - Includes basic playback controls:

@@ -15,6 +15,13 @@ struct PlaylistTrackItem: Identifiable {
     let url: URL?
 }
 
+// MARK: - Library mode
+
+enum LibraryMode: String {
+    case musicLibrary   // 系统音乐库
+    case folder         // 用户指定的文件夹，递归读取
+}
+
 // MARK: - ITLibrary cache
 
 final class LibraryCache {
@@ -114,7 +121,23 @@ final class MusicBridge: ObservableObject {
     @Published var buildStatusText: String = ""
     /// Changes only when a complete artwork snapshot becomes available.
     @Published private(set) var artworkCacheRevision: Int = 0
+    /// 当前播放列表的标识（音乐库模式是列表名，文件夹模式是目录相对路径）。
     @Published var currentPlaylistName: String = ""
+    @Published var currentPlaylistTitle: String = ""
+    @Published var currentTrackPath: String = ""
+
+    // Library mode
+    @Published private(set) var libraryMode: LibraryMode = {
+        LibraryMode(rawValue: UserDefaults.standard.string(forKey: "libraryMode") ?? "") ?? .musicLibrary
+    }()
+    @Published private(set) var folderRootURL: URL? = {
+        guard let path = UserDefaults.standard.string(forKey: "folderModeRoot"), !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }()
+    @Published private(set) var folderTree: FolderNode? = nil
+    private var folderNodes: [String: FolderNode] = [:]
+    /// 切换数据源时递增，用来丢弃过期的后台结果。
+    private var loadGeneration: UInt = 0
     @Published var volume: Float = UserDefaults.standard.object(forKey: "volume") as? Float ?? 1.0
     /// 主列表滚动位置锚点（playlist name），session 内持久，popover 关闭时销毁
     @Published var playlistScrollID: String? = nil
@@ -183,6 +206,8 @@ final class MusicBridge: ObservableObject {
         // Apply persisted volume to the player immediately
         audioPlayer.setVolume(volume)
 
+        if libraryMode == .folder, folderRootURL == nil { libraryMode = .musicLibrary }
+        applyArtworkCacheForCurrentMode()
     }
 
     func toggleWaveform() { showWaveform.toggle() }
@@ -234,6 +259,7 @@ final class MusicBridge: ObservableObject {
 
     /// 启动时调用：优先读磁盘缓存，缓存不存在才从 iTunes 框架重新构建。
     func fetchPlaylists() {
+        if libraryMode == .folder { loadFolderLibrary(rescan: false); return }
         guard playlistGroups.isEmpty else { return }
 
         // 先尝试从磁盘加载（同步，极快）
@@ -261,6 +287,7 @@ final class MusicBridge: ObservableObject {
     /// 手动刷新：强制从 iTunes 框架重新读取并覆盖缓存。
     func refreshPlaylists() {
         guard !isLoadingPlaylists else { return }
+        if libraryMode == .folder { loadFolderLibrary(rescan: true); return }
         LibraryCache.shared.invalidate()
         ArtworkCache.shared.clear()
         PlaylistDiskCache.shared.deleteAllCacheFiles()
@@ -275,6 +302,10 @@ final class MusicBridge: ObservableObject {
         isLoadingPlaylists = true
         buildProgress = 0
         buildStatusText = L.buildingCache
+        // 构建期间用户可能切到文件夹模式：抓住本次的封面缓存与代号，过期就不碰界面状态。
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        let artworkCache = TrackArtworkCache.shared
         Task.detached(priority: .userInitiated) {
             let groups = LibraryReader.fetchGroupedPlaylists()
             // 在后台线程写缓存，不阻塞主线程
@@ -290,7 +321,7 @@ final class MusicBridge: ObservableObject {
                     // 任务 1：构建封面缓存（贡献进度 0–50%）
                     group.addTask {
                         print("[MusicBridge] 📸 封面缓存构建中...")
-                        TrackArtworkCache.shared.buildCache(for: allPlaylists) { done, total in
+                        artworkCache.buildCache(for: allPlaylists) { done, total in
                             let p = prog.setArt(done: done, total: total)
                             Task { @MainActor in self.buildProgress = p }
                         }
@@ -314,13 +345,153 @@ final class MusicBridge: ObservableObject {
             }
 
             await MainActor.run { [weak self] in
-                self?.playlistGroups = groups
-                self?.isLoadingPlaylists = false
-                self?.buildProgress = 1.0
-                self?.buildStatusText = ""
-                self?.artworkCacheRevision &+= 1
+                guard let self, self.loadGeneration == generation else { return }
+                self.playlistGroups = groups
+                self.isLoadingPlaylists = false
+                self.buildProgress = 1.0
+                self.buildStatusText = ""
+                self.artworkCacheRevision &+= 1
             }
         }
+    }
+
+    // MARK: - Folder mode
+
+    /// 读 <根目录>/.bmcache；没有缓存（或手动刷新）时递归扫描并重建缓存。
+    private func loadFolderLibrary(rescan: Bool) {
+        guard let root = folderRootURL, !isLoadingPlaylists else { return }
+        if !rescan, folderTree != nil { return }
+        if rescan {
+            // 根目录读不到（比如移动硬盘没插）时保留现有内容
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue
+            else { return }
+            TrackArtworkCache.shared.invalidate()
+        }
+        isLoadingPlaylists = true
+        buildProgress = 0
+        buildStatusText = L.scanningFolder
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        let artworkCache = TrackArtworkCache.shared
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var tree = rescan ? nil : FolderLibrary.loadCache(root: root)
+            if tree != nil {
+                artworkCache.loadFromDisk { [weak self] in self?.artworkCacheRevision &+= 1 }
+            } else {
+                tree = FolderLibrary.scan(root: root, artworkCache: artworkCache) { value in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.loadGeneration == generation else { return }
+                        self.buildProgress = value
+                    }
+                }
+                if let tree { FolderLibrary.saveCache(tree, root: root) }
+            }
+            let node = tree.map { FolderNode(data: $0, url: root, key: ".") }
+            await MainActor.run { [weak self] in
+                guard let self, self.loadGeneration == generation else { return }
+                if let node {
+                    var index: [String: FolderNode] = [:]
+                    node.index(into: &index)
+                    self.folderNodes = index
+                    self.folderTree = node
+                }
+                self.isLoadingPlaylists = false
+                self.buildProgress = 1.0
+                self.buildStatusText = ""
+                self.artworkCacheRevision &+= 1
+            }
+        }
+    }
+
+    private func applyArtworkCacheForCurrentMode() {
+        if libraryMode == .folder, let root = folderRootURL {
+            TrackArtworkCache.activate(.folder(at: root))
+        } else {
+            TrackArtworkCache.activate(.library)
+        }
+    }
+
+    private func reloadForSourceChange() {
+        loadGeneration &+= 1                 // 让在途的后台结果失效
+        isLoadingPlaylists = false
+        buildProgress = 0
+        buildStatusText = ""
+        drillLoadGeneration &+= 1
+        isLoadingDrill = false
+        drillPlaylistName = nil
+        drillTracks = []
+        playlistScrollID = nil
+        playlistGroups = []
+        folderTree = nil
+        folderNodes = [:]
+        applyArtworkCacheForCurrentMode()
+        artworkCacheRevision &+= 1
+        fetchPlaylists()
+    }
+
+    func setLibraryMode(_ mode: LibraryMode) {
+        guard mode != libraryMode else { return }
+        if mode == .folder, folderRootURL == nil { return }     // 需要先指定文件夹
+        libraryMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "libraryMode")
+        reloadForSourceChange()
+    }
+
+    /// 指定（或更换）文件夹，并切换到文件夹模式。
+    func setFolderRoot(_ url: URL) {
+        let root = url.standardizedFileURL
+        let changed = folderRootURL?.path != root.path
+        folderRootURL = root
+        UserDefaults.standard.set(root.path, forKey: "folderModeRoot")
+        if libraryMode == .folder && !changed { return }
+        libraryMode = .folder
+        UserDefaults.standard.set(LibraryMode.folder.rawValue, forKey: "libraryMode")
+        reloadForSourceChange()
+    }
+
+    /// 界面上显示的列表名：文件夹模式下标识是相对路径，显示的是目录名。
+    func playlistTitle(for key: String) -> String {
+        libraryMode == .folder ? (folderNodes[key]?.name ?? key) : key
+    }
+
+    func representativeKey(forPlaylist key: String) -> String? {
+        if libraryMode == .folder { return folderNodes[key]?.repKey }
+        return playlistGroups.flatMap { $0.playlists }.first { $0.name == key }?.representativeTrackKey
+    }
+
+    /// 列表头部右侧的数字：音乐库是列表数，文件夹模式是曲目总数。
+    var listTotalCount: Int {
+        libraryMode == .folder
+            ? (folderTree?.totalTracks ?? 0)
+            : playlistGroups.reduce(0) { $0 + $1.playlists.count }
+    }
+
+    private func orderedTracks(of node: FolderNode) -> [PlaylistTrackItem] {
+        guard sortByTrackOrder else { return node.tracks }
+        return node.tracks.sorted {
+            if $0.discNumber != $1.discNumber { return $0.discNumber < $1.discNumber }
+            return $0.trackNumber < $1.trackNumber
+        }
+    }
+
+    /// 播放某个目录下直接包含的曲目；tappedURL 指定从哪一首开始。
+    private func playFolderNode(_ node: FolderNode, startingAt tappedURL: URL? = nil) {
+        let items = AudioPlayer.PlayerItem.build(from: node.tracks, sortByTrack: sortByTrackOrder)
+        guard !items.isEmpty else { return }
+        let start = tappedURL.flatMap { url in items.firstIndex { $0.url == url } } ?? 0
+        currentPlaylistName = node.key
+        currentPlaylistTitle = node.name
+        audioPlayer.load(items: items, startIndex: start)
+    }
+
+    /// 主列表里点击散落的音频文件：以所在目录为队列，从这一首开始。
+    func playFolderTrack(dirKey: String, index: Int) {
+        guard let node = folderNodes[dirKey] else { return }
+        let ordered = orderedTracks(of: node)
+        guard index < ordered.count else { return }
+        playFolderNode(node, startingAt: ordered[index].url)
     }
 
     // MARK: - Drill-down
@@ -331,6 +502,13 @@ final class MusicBridge: ObservableObject {
         // through the Core Animation movement and appears to skip the animation.
         drillLoadGeneration &+= 1
         let generation = drillLoadGeneration
+        if libraryMode == .folder {
+            guard let node = folderNodes[name] else { return }
+            drillTracks = node.tracks
+            isLoadingDrill = false
+            drillPlaylistName = name
+            return
+        }
         drillTracks = []
         isLoadingDrill = true
         Task.detached(priority: .userInitiated) {
@@ -404,6 +582,7 @@ final class MusicBridge: ObservableObject {
             }) ?? 0
             await MainActor.run { [weak self] in
                 self?.currentPlaylistName = name
+                self?.currentPlaylistTitle = self?.playlistTitle(for: name) ?? name
                 self?.audioPlayer.load(items: items, startIndex: startIndex)
             }
         }
@@ -414,6 +593,10 @@ final class MusicBridge: ObservableObject {
     }
 
     func playPlaylist(named name: String) {
+        if libraryMode == .folder {
+            if let node = folderNodes[name] { playFolderNode(node) }
+            return
+        }
         let sortByTrack = sortByTrackOrder
         Task.detached(priority: .userInitiated) {
             // 优先从缓存读取（L1/L2/L3），无需 ITLibrary → 零延迟
@@ -422,6 +605,7 @@ final class MusicBridge: ObservableObject {
                 if !items.isEmpty {
                     await MainActor.run { [weak self] in
                         self?.currentPlaylistName = name
+                        self?.currentPlaylistTitle = name
                         self?.audioPlayer.load(items: items, startIndex: 0)
                     }
                     return
@@ -435,6 +619,7 @@ final class MusicBridge: ObservableObject {
             guard !items.isEmpty else { return }
             await MainActor.run { [weak self] in
                 self?.currentPlaylistName = name
+                self?.currentPlaylistTitle = name
                 self?.audioPlayer.load(items: items, startIndex: 0)
             }
         }
@@ -466,16 +651,59 @@ final class MusicBridge: ObservableObject {
     enum FlatPlaylistItem: Identifiable {
         case folderHeader(group: PlaylistGroup, collapsed: Bool)
         case playlist(group: PlaylistGroup, info: PlaylistInfo)
+        /// 文件夹模式：直接显示在主列表里的音频文件。
+        case track(group: PlaylistGroup, track: PlaylistTrackItem, dirKey: String, index: Int)
 
         var id: String {
             switch self {
             case .folderHeader(let g, _): return "folder:\(g.folderName)"
             case .playlist(_, let p):    return p.id.uuidString
+            case .track(_, let t, _, _): return "track:\(t.url?.path ?? t.id.uuidString)"
             }
         }
     }
 
+    /// 文件夹模式的主列表：
+    ///  · 只含音乐的文件夹 → 一行，可进入
+    ///  · 含子文件夹的文件夹 → 带箭头的折叠头，里面是它的子文件夹和直接包含的音频
+    ///  · 根目录直接包含的音频 → 直接平铺
+    private var folderFlatItems: [FlatPlaylistItem] {
+        guard let root = folderTree else { return [] }
+        var result: [FlatPlaylistItem] = []
+
+        func emit(_ node: FolderNode, level: Int) {
+            // level 0 = 根（不缩进）；其余与音乐库模式的文件夹缩进规则一致
+            let group = PlaylistGroup(
+                folderName: level == 0 ? "" : node.url.path, folderArtwork: nil,
+                isFolder: level > 0, indentLevel: level, ancestorFolderNames: [],
+                playlists: [], representativeTrackKey: node.repKey)
+
+            for child in node.children {
+                if child.isLeaf {
+                    result.append(.playlist(group: group, info: PlaylistInfo(
+                        id: child.id, libraryID: NSNumber(value: 0), name: child.key,
+                        trackCount: child.tracks.count, kind: .folder, artworkImage: nil,
+                        isFolder: false, representativeTrackKey: child.repKey, title: child.name)))
+                } else {
+                    let header = PlaylistGroup(
+                        folderName: child.url.path, folderArtwork: nil, isFolder: true,
+                        indentLevel: level + 1, ancestorFolderNames: [], playlists: [],
+                        representativeTrackKey: child.repKey, title: child.name)
+                    let collapsed = isFolderCollapsed(header.folderName)
+                    result.append(.folderHeader(group: header, collapsed: collapsed))
+                    if !collapsed { emit(child, level: level + 1) }
+                }
+            }
+            for (i, track) in orderedTracks(of: node).enumerated() {
+                result.append(.track(group: group, track: track, dirKey: node.key, index: i))
+            }
+        }
+        emit(root, level: 0)
+        return result
+    }
+
     var flatPlaylistItems: [FlatPlaylistItem] {
+        if libraryMode == .folder { return folderFlatItems }
         var result: [FlatPlaylistItem] = []
         for group in playlistGroups {
             guard !isGroupHidden(group) else { continue }
@@ -496,6 +724,8 @@ final class MusicBridge: ObservableObject {
     // MARK: - Track sync
 
     private func syncCurrentTrack() {
+        let path = audioPlayer.currentURL?.path ?? ""
+        if currentTrackPath != path { currentTrackPath = path }
         guard let info = audioPlayer.currentTrackInfo else {
             currentTrack = TrackInfo()
             currentArtwork = nil
